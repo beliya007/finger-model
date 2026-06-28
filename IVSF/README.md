@@ -52,7 +52,8 @@
 CPU 运行：
 
 	.\.venv\Scripts\python.exe run_ivsf_fingerprint.py --quick --checkpoint-path ./checkpoints/resnet20_cifar10.pth --device cpu
-
+    
+& ".\.venv\Scripts\python.exe" .\IVSF\run_ivsf_fingerprint.py --device cpu
 ## 4. 输出文件
 
 默认输出目录：./outputs/quick_run

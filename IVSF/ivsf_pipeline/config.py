@@ -10,7 +10,8 @@ class IVSFConfig:
 
     # Dataset
     data_root: str = "./data"
-    num_base_samples: int = 100
+    # 待生成指纹的原始样本数量
+    num_base_samples: int = 2
     num_workers: int = 2
 
     # Fingerprint generation

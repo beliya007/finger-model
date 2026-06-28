@@ -1,0 +1,36 @@
+{
+  "config": {
+    "seed": 1337,
+    "device": "cpu",
+    "data_root": "./data",
+    "num_base_samples": 2,
+    "num_workers": 2,
+    "num_candidates_per_sample": 6,
+    "top_k_per_sample": 3,
+    "steps": 50,
+    "lr": 0.02,
+    "eps_linf": 0.03137254901960784,
+    "tau_js": 0.08,
+    "lambda_boundary": 1.0,
+    "lambda_detect": 0.6,
+    "lambda_js": 0.8,
+    "lambda_stealth": 0.15,
+    "bu_margin_lambda": 1.0,
+    "score_alpha": 1.0,
+    "score_beta": 1.0,
+    "score_gamma": 0.2,
+    "output_dir": "./outputs/quick_run",
+    "visualization_count": 12,
+    "checkpoint_path": "./checkpoints/resnet20_cifar10.pth"
+  },
+  "device_used": "cpu",
+  "checkpoint_path": "D:\\桌面\\tuili\\shiyan-finger-model\\checkpoints\\resnet20_cifar10.pth",
+  "num_processed_samples": 2,
+  "num_candidates_per_sample": 6,
+  "top_k_per_sample": 3,
+  "elapsed_seconds": 17.039658308029175,
+  "verification_interface": {
+    "status": "placeholder",
+    "note": "Online verification is intentionally not implemented in this stage."
+  }
+}
