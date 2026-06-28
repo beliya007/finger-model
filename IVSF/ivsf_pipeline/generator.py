@@ -170,6 +170,7 @@ class IVSFFingerprintGenerator:
                 p_ref = softmax_probs(self.model(normalize_batch(x, self.mean, self.std)))
 
             base_images.append(x[0].detach().cpu().numpy())
+            #源样本的标签和数据集索引
             base_labels.append(int(y.item()))
             base_dataset_indices.append(dataset_idx)
             ref_probs.append(p_ref[0].detach().cpu().numpy())
@@ -182,7 +183,7 @@ class IVSFFingerprintGenerator:
                 with torch.no_grad():
                     x_adv = torch.clamp(x + delta, 0.0, 1.0)
                     p_adv = softmax_probs(self.model(normalize_batch(x_adv, self.mean, self.std)))
-
+#指纹对应的预测标签
                 pred_label = int(torch.argmax(p_adv, dim=1).item())
 
                 sample_candidates.append((x_adv, delta, p_adv, score_dict))
