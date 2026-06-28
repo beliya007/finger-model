@@ -70,3 +70,69 @@ def save_preview_figure(
     fig.tight_layout()
     fig.savefig(path, dpi=180)
     plt.close(fig)
+
+
+def save_one_base_with_three_fingerprints(
+    path: Path,
+    base_image: np.ndarray,
+    fingerprint_images: np.ndarray,
+    fingerprint_scores: np.ndarray,
+    dataset_idx: int,
+    label: int,
+) -> None:
+    n_fp = min(3, int(fingerprint_images.shape[0]))
+    if n_fp <= 0:
+        return
+
+    fig, axes = plt.subplots(1, 1 + n_fp, figsize=(3.2 * (1 + n_fp), 3.4))
+    if not isinstance(axes, np.ndarray):
+        axes = np.array([axes])
+
+    axes[0].imshow(_to_hwc(base_image))
+    axes[0].set_title(f"base (idx={dataset_idx}, y={label})")
+    axes[0].axis("off")
+
+    for i in range(n_fp):
+        axes[i + 1].imshow(_to_hwc(fingerprint_images[i]))
+        axes[i + 1].set_title(f"fp{i+1}  score={float(fingerprint_scores[i]):.4f}")
+        axes[i + 1].axis("off")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
+def save_two_bases_with_three_fingerprints(
+    path: Path,
+    base_images: np.ndarray,
+    base_dataset_indices: np.ndarray,
+    base_labels: np.ndarray,
+    fingerprint_images_grouped: np.ndarray,
+    fingerprint_scores_grouped: np.ndarray,
+    fingerprint_pred_labels_grouped: np.ndarray,
+) -> None:
+    n_rows = min(2, int(base_images.shape[0]))
+    if n_rows <= 0:
+        return
+
+    fig, axes = plt.subplots(n_rows, 4, figsize=(14, 3.8 * n_rows))
+    if n_rows == 1:
+        axes = np.array([axes])
+
+    for r in range(n_rows):
+        axes[r, 0].imshow(_to_hwc(base_images[r]))
+        axes[r, 0].set_title(f"base (idx={int(base_dataset_indices[r])}, y={int(base_labels[r])})")
+        axes[r, 0].axis("off")
+
+        n_fp = min(3, int(fingerprint_images_grouped.shape[1]))
+        for c in range(n_fp):
+            axes[r, c + 1].imshow(_to_hwc(fingerprint_images_grouped[r, c]))
+            axes[r, c + 1].set_title(
+                f"fp{c+1} y_hat={int(fingerprint_pred_labels_grouped[r, c])}\n"
+                f"score={float(fingerprint_scores_grouped[r, c]):.4f}"
+            )
+            axes[r, c + 1].axis("off")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)

@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 
 @dataclass
@@ -13,6 +13,10 @@ class IVSFConfig:
     # 待生成指纹的原始样本数量
     num_base_samples: int = 2
     num_workers: int = 2
+    # 每次是否随机抽取基础样本
+    random_base_sampling: bool = True
+    # 随机抽样种子。None 表示每次运行随机；设为整数可复现。
+    base_sample_seed: Optional[int] = None
 
     # Fingerprint generation
     num_candidates_per_sample: int = 6
