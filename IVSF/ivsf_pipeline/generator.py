@@ -24,18 +24,13 @@ from .model import load_resnet20_cifar10
 
 
 class IVSFFingerprintGenerator:
-    def __init__(self, repo_root: Path, config: IVSFConfig):
-        self.repo_root = repo_root
+    def __init__(self, config: IVSFConfig):
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
 
         self.model, self.checkpoint_path = load_resnet20_cifar10(
-            repo_root=self.repo_root,
-            model_source=config.model_source,
             checkpoint_path=Path(config.checkpoint_path),
-            train_config_path=Path(config.train_config_path),
             device=self.device,
-            train_num_models=config.train_num_models,
         )
 
         self.mean, self.std = cifar10_mean_std(self.device)

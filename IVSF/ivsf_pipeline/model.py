@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import subprocess
-import sys
+from collections import OrderedDict
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -67,51 +66,107 @@ class ResNet20CIFAR10(nn.Module):
         return out
 
 
-def _load_state_dict_from_checkpoint(checkpoint_path: Path) -> dict:
-    checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
-    if isinstance(checkpoint, dict) and "model" in checkpoint:
-        return checkpoint["model"]
+def _normalize_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    # Handle checkpoints saved from DataParallel or wrapped modules.
+    normalized = OrderedDict()
+    for k, v in state_dict.items():
+        nk = k[7:] if k.startswith("module.") else k
+        normalized[nk] = v
+    return normalized
+
+
+def _convert_public_resnet20_to_local_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    # Convert keys like conv1/bn1/layerX.Y.conv1 to local keys used in this file.
+    converted = OrderedDict()
+    for k, v in state_dict.items():
+        nk = k
+
+        if nk.startswith("conv1."):
+            nk = nk.replace("conv1.", "conv1.0.", 1)
+        elif nk.startswith("bn1."):
+            nk = nk.replace("bn1.", "conv1.1.", 1)
+        elif nk.startswith("layer"):
+            nk = nk.replace(".conv1.", ".left.0.")
+            nk = nk.replace(".bn1.", ".left.1.")
+            nk = nk.replace(".conv2.", ".left.3.")
+            nk = nk.replace(".bn2.", ".left.4.")
+            nk = nk.replace(".downsample.0.", ".shortcut.0.")
+            nk = nk.replace(".downsample.1.", ".shortcut.1.")
+
+        converted[nk] = v
+    return converted
+
+
+def _extract_state_dict(checkpoint: object) -> Dict[str, torch.Tensor]:
+    # BIVBench usually saves as {"model": ..., "optimizer": ...}; keep this as first priority.
     if isinstance(checkpoint, dict):
-        return checkpoint
-    raise ValueError("Unsupported checkpoint format.")
+        for key in ("model", "state_dict", "net", "weights"):
+            if key in checkpoint and isinstance(checkpoint[key], dict):
+                state_dict = _normalize_state_dict_keys(checkpoint[key])
+                if "bn1.weight" in state_dict and "conv1.0.weight" not in state_dict:
+                    state_dict = _convert_public_resnet20_to_local_keys(state_dict)
+                return state_dict
+
+        # Some checkpoints are plain state_dict directly.
+        if checkpoint and all(isinstance(k, str) for k in checkpoint.keys()):
+            state_dict = _normalize_state_dict_keys(checkpoint)
+            if "bn1.weight" in state_dict and "conv1.0.weight" not in state_dict:
+                state_dict = _convert_public_resnet20_to_local_keys(state_dict)
+            return state_dict
+
+    raise ValueError("Unsupported checkpoint format. Expected dict with model/state_dict or plain state_dict.")
 
 
-def maybe_train_model(repo_root: Path, train_config_path: Path, num_models: int = 1) -> Path:
-    script = repo_root / "BIVBench-main" / "train_protect_model.py"
-    cmd = [
-        sys.executable,
-        str(script),
-        "-c",
-        str(train_config_path),
-        "--num",
-        str(num_models),
+def _load_state_dict_from_checkpoint(checkpoint_path: Path) -> Dict[str, torch.Tensor]:
+    checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
+    return _extract_state_dict(checkpoint)
+
+
+def _resolve_checkpoint_path(checkpoint_path: Path) -> Path:
+    # Resolve user-provided path first.
+    provided = checkpoint_path.resolve() if not checkpoint_path.is_absolute() else checkpoint_path
+    if provided.exists():
+        return provided
+
+    # Fallback to BIVBench common locations when users want to reuse its trained weights.
+    cwd = Path.cwd()
+    candidates = [
+        cwd / ".." / "BIVBench-main" / "outputs" / "cifar10" / "random_start_models" / "resnet20" / "best_0.pth",
+        cwd / ".." / "BIVBench-main" / "outputs" / "cifar10" / "random_start" / "resnet20" / "best_0.pth",
+        cwd / "BIVBench-main" / "outputs" / "cifar10" / "random_start_models" / "resnet20" / "best_0.pth",
+        cwd / "BIVBench-main" / "outputs" / "cifar10" / "random_start" / "resnet20" / "best_0.pth",
     ]
-    subprocess.run(cmd, check=True, cwd=str(repo_root / "BIVBench-main"))
-    default_ckpt = repo_root / "BIVBench-main" / "outputs" / "cifar10" / "random_start_models" / "resnet20" / "best_0.pth"
-    if not default_ckpt.exists():
-        raise FileNotFoundError(f"Training finished but checkpoint not found: {default_ckpt}")
-    return default_ckpt
+    for p in candidates:
+        rp = p.resolve()
+        if rp.exists():
+            return rp
+
+    # Final fallback: download a public CIFAR-10 ResNet20 checkpoint.
+    # This keeps IVSF runnable even when no local/BIVBench weights are present.
+    target = provided
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        hub_model = torch.hub.load("chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True)
+        torch.save({"model": hub_model.state_dict()}, str(target))
+        if target.exists():
+            return target
+    except Exception:
+        pass
+
+    tried = "\n".join([str(provided)] + [str(p.resolve()) for p in candidates])
+    raise FileNotFoundError(
+        "Checkpoint not found. Searched these paths:\n"
+        f"{tried}\n"
+        "Also tried to download public CIFAR-10 ResNet20 weights but failed. "
+        "Place your trained weight in IVSF/checkpoints/resnet20_cifar10.pth or pass --checkpoint-path explicitly."
+    )
 
 
 def load_resnet20_cifar10(
-    repo_root: Path,
-    model_source: str,
     checkpoint_path: Path,
-    train_config_path: Path,
     device: torch.device,
-    train_num_models: int = 1,
 ) -> Tuple[nn.Module, Path]:
-    if model_source not in {"checkpoint", "train"}:
-        raise ValueError("model_source must be one of: checkpoint, train")
-
-    ckpt_path = checkpoint_path
-    if model_source == "train":
-        ckpt_path = maybe_train_model(repo_root, train_config_path, train_num_models)
-
-    if not ckpt_path.is_absolute():
-        ckpt_path = repo_root / ckpt_path
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    ckpt_path = _resolve_checkpoint_path(checkpoint_path)
 
     model = ResNet20CIFAR10(num_classes=10)
     state_dict = _load_state_dict_from_checkpoint(ckpt_path)

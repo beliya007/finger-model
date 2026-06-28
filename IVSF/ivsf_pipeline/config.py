@@ -9,7 +9,7 @@ class IVSFConfig:
     device: str = "cuda"
 
     # Dataset
-    data_root: str = "~/.wrt/data"
+    data_root: str = "./data"
     num_base_samples: int = 100
     num_workers: int = 2
 
@@ -34,20 +34,17 @@ class IVSFConfig:
     score_gamma: float = 0.2
 
     # Outputs
-    output_dir: str = "IVSF/outputs/quick_run"
+    output_dir: str = "./outputs/quick_run"
     visualization_count: int = 12
 
-    # Model source
-    model_source: str = "checkpoint"  # checkpoint|train
-    checkpoint_path: str = "BIVBench-main/outputs/cifar10/random_start_models/resnet20/best_0.pth"
-    train_config_path: str = "BIVBench-main/configs/cifar10/train_configs/resnet20.yaml"
-    train_num_models: int = 1
+    # Model
+    checkpoint_path: str = "./checkpoints/resnet20_cifar10.pth"
 
     def to_dict(self) -> Dict:
         return asdict(self)
 
     @staticmethod
-    def quick(output_dir: str = "IVSF/outputs/quick_run") -> "IVSFConfig":
+    def quick(output_dir: str = "./outputs/quick_run") -> "IVSFConfig":
         cfg = IVSFConfig()
         cfg.output_dir = output_dir
         return cfg
