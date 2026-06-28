@@ -1,1 +1,5 @@
-IVSF/data/
+data/
+checkpoints/
+outputs/
+**/__pycache__/
+*.pyc
