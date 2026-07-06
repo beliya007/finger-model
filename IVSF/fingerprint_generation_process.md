@@ -54,8 +54,11 @@
 
 - fingerprints.npz: 所有数组型产物
 - scores.csv: 每个候选的评分明细
+- verification_info.csv: 每个最终入选指纹的验证参考信息
 - meta.json: 运行配置和统计信息
 - preview.png: 可视化预览图
+- one_base_three_fingerprints.png: 1 个基础样本及其 3 个入选指纹示例图
+- two_bases_three_fingerprints.png: 2 个基础样本及其各自 3 个入选指纹示例图
 
 ## 4. 模型加载流程（兼容多来源权重）
 
@@ -84,9 +87,12 @@
 实现文件: ivsf_pipeline/data.py
 
 1. 读取 CIFAR-10 训练集，download=True
-2. 按 num_base_samples 截取子集
-3. DataLoader 使用 batch_size=1 顺序遍历
-4. 采用固定均值方差进行标准化:
+2. 按 num_base_samples 选取子集
+- 默认行为是 random_base_sampling=True，即做无放回随机抽样
+- 若 random_base_sampling=False，则退化为取前 num_base_samples 个样本
+3. 可通过 base_sample_seed 控制随机抽样是否可复现
+4. DataLoader 使用 batch_size=1 顺序遍历
+5. 采用固定均值方差进行标准化:
 - mean = [0.4914, 0.4822, 0.4465]
 - std = [0.247, 0.243, 0.261]
 
@@ -94,17 +100,52 @@
 
 实现文件: ivsf_pipeline/generator.py
 
+当前主循环的真实结构是“固定一个基础样本，再在它的局部邻域内优化出多个候选 delta”。
+
 对每个基础样本 x 执行:
 
-1. 先计算参考输出分布 p_ref = softmax(f(x))
-2. 循环生成 num_candidates_per_sample 个候选扰动
-3. 每个候选初始化 delta ~ U(-eps_linf, eps_linf)
-4. 用 Adam 优化 delta，迭代 steps 次
-5. 每步执行:
-- x_adv = clamp(x + delta, 0, 1)
-- p_adv = softmax(f(x_adv))
-- 计算多目标损失并反向更新
-- 将 delta 投影回 [-eps_linf, eps_linf]
+1. 从 DataLoader 取出一个 batch_size=1 的样本 (x, y)
+- y 会参与边界损失计算
+- 同时还会记录该样本在原始 CIFAR-10 训练集中的索引 dataset_idx
+
+2. 先计算参考输出分布 p_ref
+- 实际计算为 p_ref = softmax(model(normalize(x)))
+- normalize 使用 CIFAR-10 固定均值方差
+
+3. 对同一个 x 重复 num_candidates_per_sample 次候选优化
+- 每次都独立调用 _single_candidate_optimize(x, y, p_ref)
+- 因而一个基础样本对应的是一个候选集合，而不是单个扰动
+
+4. 单个候选的优化变量是 delta，而不是模型参数
+- 初始时随机采样:
+
+	delta ~ U(-eps_linf, eps_linf)
+
+- 然后将 delta 设为 requires_grad=True
+- 使用 Adam([delta], lr=lr) 进行优化
+
+5. 每一步优化都执行以下闭环:
+- 构造扰动样本:
+
+	x_adv = clamp(x + delta, 0, 1)
+
+- 前向得到候选输出分布:
+
+	p_adv = softmax(model(normalize(x_adv)))
+
+- 计算多目标损失 total
+- 对 total 反向传播并更新 delta
+- 更新后再将 delta 强制截断回 [-eps_linf, eps_linf]
+
+6. 优化结束后，再用最终 delta 重新计算一次 x_adv 和 p_adv
+- 然后基于最终结果计算候选评分
+- 返回值是 delta.detach() 和 score_dict
+
+因此，代码中的“根据 delta 生成候选指纹”的准确含义是:
+
+- 先在基础样本 x 附近优化得到一个受 L∞ 约束的 delta
+- 再用 x_adv = clamp(x + delta, 0, 1) 得到候选指纹样本
+- 同一个基础样本通过不同随机初值的 delta 重复上述过程，得到多个候选指纹
 
 ### 6.1 基础样本如何得到多个候选指纹
 
@@ -119,13 +160,14 @@
 - 每次都重新随机初始化一个 delta
 - 每次都从不同的随机起点出发优化
 
-3. 每次优化结束后得到一个候选指纹
+3. 每次优化结束后，用最终 delta 构造一个候选指纹
 - 对应扰动后的样本 x_adv
 - 对应扰动 delta
 - 对应输出概率 p_adv
 - 对应候选评分 score_dict
 
 4. 这些候选先全部保存在 sample_candidates 中
+- sample_candidates 的单个元素实际是 (x_adv, delta, p_adv, score_dict)
 - 也就是说，一个基础样本会先得到一个候选集合
 - 还不会立刻决定哪些是最终指纹
 
@@ -141,11 +183,14 @@
 2. score_dict
 - 包含 S_BU、S_sens、S_stealth、S_total
 - 也包含 final_loss、final_boundary、final_detect、final_js、final_stealth
+- 这些 final_* 来自优化循环最后一步记录的历史值
 
 3. scores.csv 对应的一行
 - sample_idx: 第几个基础样本
 - dataset_idx: 该基础样本在原 CIFAR-10 子集中的索引
 - candidate_idx: 该基础样本下的第几个候选
+- base_label: 该基础样本真实标签
+- candidate_pred_label: 该候选指纹的预测标签
 - is_selected: 初始记为 0，后续若进入 top-k 再改为 1
 
 ## 7. 多目标损失定义
@@ -173,11 +218,21 @@
 5. 总损失
 - L = lambda_boundary * L_boundary + lambda_detect * L_detect + lambda_js * L_js + lambda_stealth * L_stealth
 
+这里有两个实现细节需要特别说明:
+
+1. boundary_loss 的实现不是直接对 top1-top2 做绝对值
+- 它先取真实类概率 p_true
+- 再取“非真实类中的最大概率” max_non_true
+- 最终计算 |p_true - max_non_true|
+
+2. detect_loss = -JS(p_ref, p_adv)
+- 因为整体目标是最小化总损失，所以这一项等价于鼓励 p_adv 与 p_ref 的分布差异变大
+
 ## 8. 候选评分与 Top-K 筛选
 
 实现文件: ivsf_pipeline/generator.py + ivsf_pipeline/losses.py
 
-每个候选优化结束后计算:
+每个候选优化结束后，代码会基于最终的 p_adv 和 delta 计算评分:
 
 1. 结构不确定性分数
 - S_BU = entropy(p_adv) - margin_lambda * (top1 - top2)
@@ -191,7 +246,7 @@
 4. 总分
 - S_total = alpha * S_BU + beta * S_sens - gamma * S_stealth
 
-然后对每个基础样本的候选按 S_total 降序排序，保留 top_k_per_sample 个作为最终指纹。
+然后对每个基础样本内部的候选按 S_total 降序排序，保留 top_k_per_sample 个作为最终指纹。
 
 ### 8.1 基础样本如何得到筛选后的指纹
 
@@ -213,6 +268,7 @@
 - selected_probs
 - selected_scores
 - selected_pred_labels
+- 同时也写入当前基础样本对应的 top_imgs、top_dels、top_probs、top_scores、top_pred_labels
 
 4. 记录该指纹来自哪个基础样本
 - selected_base_sample_indices 记录它属于哪个 sample_idx
@@ -222,6 +278,8 @@
 - 若某个候选进入 top-k，则其 is_selected 从 0 改成 1
 
 因此，最终“筛选后的指纹”不是对全体候选做全局筛选，而是“每个基础样本内部各自保留 top_k_per_sample 个最优候选”。
+
+换句话说，不同基础样本之间不会共享名额，也不会把所有候选混在一起做一次全局 Top-K。
 
 ### 8.2 筛选后指纹的组织方式
 
@@ -234,8 +292,19 @@
 2. 按基础样本分组视图
 - selected_images_grouped、selected_probs_grouped、selected_scores_grouped 等
 - 第 0 维对应基础样本，第 1 维对应该样本内部保留下来的 top-k 指纹
+- 这些 grouped 字段由每个基础样本自己的 top_* 列表 stack 而成
 
 这样既能追踪“每个基础样本选中了哪些指纹”，也能把所有入选指纹合并起来做后续验证准备。
+
+除此之外，代码还会保留所有候选的完整集合:
+
+- candidate_images
+- candidate_deltas
+- candidate_probs
+- candidate_scores
+- candidate_pred_labels
+
+这些字段保留了“每个基础样本下所有候选”的完整历史，便于复查筛选前的候选分布。
 
 ## 9. 指纹标签与互信息准备阶段
 
@@ -254,6 +323,8 @@
 - 随后直接复制为 verification_pred_labels
 - 含义: 后续验证时，这个标签就是该指纹在参考模型上的期望预测类别
 
+因此，当前实现中的“指纹标签”并不是基础样本的真实标签 y，而是最终入选指纹样本在参考模型下的预测标签。
+
 可理解为:
 
 - pred_label_i = argmax p(y|x_i^{fp})
@@ -269,6 +340,7 @@
 2. 先估计边际类别分布
 - 对所有指纹的概率向量按样本维求平均，得到 p(y)
 - 这一步表示“参考模型在整组指纹上的平均输出分布”
+- 在实现里还会先做 clip 和按行归一化，避免数值下溢以及 log(0)
 
 3. 对每个指纹计算局部互信息代理值
 - 当前实现不是论文中的完整 KSG 互信息估计
@@ -283,6 +355,7 @@
 4. 生成两个结果
 - verification_mi_per_fingerprint: 每个指纹对应一个 MI_i
 - verification_mi_ref: 所有 MI_i 的平均值，作为整组参考互信息
+- verification_threshold: 直接取自配置中的 mi_threshold
 
 可理解为:
 
@@ -300,6 +373,7 @@
 
 3. 因此当前 verification_mi_per_fingerprint 更准确地说是“基于输出分布的逐指纹互信息代理值”
 - 不是严格意义上对原始输入 x 与输出 p(y|x) 的高维非参数互信息估计
+- 它的具体实现函数是 _pointwise_mi_from_probs(selected_probs)
 
 ### 9.4 落盘结果
 
@@ -319,27 +393,44 @@
 - pred_label
 - mi_input_output
 
-其中 mi_input_output 当前对应的就是上面定义的逐指纹互信息代理值。
+其中:
+
+- fingerprint_idx 是该指纹在扁平 selected_* 视图中的索引
+- base_sample_idx 表示它来自哪个基础样本
+- dataset_idx 是回查得到的原始 CIFAR-10 训练集索引
+- fingerprint_rank 表示它在该基础样本内部的排序名次
+- mi_input_output 当前对应的就是上面定义的逐指纹互信息代理值
 
 ## 10. 产物组织细节
 
 实现文件: ivsf_pipeline/generator.py + ivsf_pipeline/io_utils.py
 
 1. fingerprints.npz 包含:
-- base_images, base_labels, ref_probs
-- candidate_images, candidate_deltas, candidate_probs, candidate_scores
-- selected_images, selected_deltas, selected_probs, selected_scores
-- verification_pred_labels, verification_mi_per_fingerprint, verification_mi_ref, verification_threshold
+- 基础样本信息:
+	- base_images, base_labels, base_dataset_indices, ref_probs
+- 所有候选信息:
+	- candidate_images, candidate_deltas, candidate_probs, candidate_scores, candidate_pred_labels
+- 最终入选指纹的扁平视图:
+	- selected_images, selected_deltas, selected_probs, selected_scores, selected_pred_labels
+	- selected_base_sample_indices, selected_rank_in_sample
+- 最终入选指纹的分组视图:
+	- selected_images_grouped, selected_deltas_grouped, selected_probs_grouped
+	- selected_scores_grouped, selected_pred_labels_grouped
+- 离线验证参考信息:
+	- verification_pred_labels, verification_mi_per_fingerprint, verification_mi_ref, verification_threshold
 
 2. scores.csv
 - 每行对应一个候选
-- 包含 sample_idx, candidate_idx, label, S_BU, S_sens, S_stealth, S_total 及最终损失分解
+- 包含 sample_idx, dataset_idx, candidate_idx, base_label, candidate_pred_label
+- 也包含 is_selected, S_BU, S_sens, S_stealth, S_total 及 final_* 损失分解
 
 3. meta.json
 - 全部配置
 - 实际使用设备
 - checkpoint 实际路径
+- 实际采样到的 base_dataset_indices
 - 样本规模与耗时
+- 离线验证参考信息摘要
 - 验证接口占位说明
 
 4. preview.png
