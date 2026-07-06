@@ -42,6 +42,12 @@ class IVSFConfig:
     output_dir: str = "./outputs/quick_run"
     visualization_count: int = 12
 
+    # Offline verification artifacts (label + input-output MI)
+    mi_pca_components_input: int = 16
+    mi_pca_components_output: int = 8
+    mi_ksg_k: int = 3
+    mi_threshold: float = 0.05
+
     # Model
     checkpoint_path: str = "./checkpoints/resnet20_cifar10.pth"
 

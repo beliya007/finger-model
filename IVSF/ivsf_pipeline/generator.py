@@ -117,10 +117,21 @@ class IVSFFingerprintGenerator:
         }
         return delta.detach(), scores
 
+    @staticmethod
+    def _pointwise_mi_from_probs(selected_probs: np.ndarray, eps: float = 1e-12) -> Tuple[float, np.ndarray]:
+        # Per-fingerprint MI surrogate: KL(p(y|x_i) || p(y)).
+        probs = np.clip(selected_probs.astype(np.float64), eps, 1.0)
+        probs = probs / probs.sum(axis=1, keepdims=True)
+
+        p_marginal = probs.mean(axis=0, keepdims=True)
+        p_marginal = np.clip(p_marginal, eps, 1.0)
+
+        local_mi = np.sum(probs * (np.log(probs) - np.log(p_marginal)), axis=1)
+        return float(local_mi.mean()), local_mi.astype(np.float32)
+
     def run(self) -> Dict[str, Path]:
         self._set_seed()
         output_dir = self.config.ensure_output_dir()
-        # Always start from a clean output directory to avoid stale artifacts.
         for item in output_dir.iterdir():
             if item.is_dir():
                 shutil.rmtree(item)
@@ -146,6 +157,8 @@ class IVSFFingerprintGenerator:
         selected_probs: List[np.ndarray] = []
         selected_scores: List[float] = []
         selected_pred_labels: List[int] = []
+        selected_base_sample_indices: List[int] = []
+        selected_rank_in_sample: List[int] = []
 
         selected_images_grouped: List[np.ndarray] = []
         selected_deltas_grouped: List[np.ndarray] = []
@@ -170,7 +183,6 @@ class IVSFFingerprintGenerator:
                 p_ref = softmax_probs(self.model(normalize_batch(x, self.mean, self.std)))
 
             base_images.append(x[0].detach().cpu().numpy())
-            #源样本的标签和数据集索引
             base_labels.append(int(y.item()))
             base_dataset_indices.append(dataset_idx)
             ref_probs.append(p_ref[0].detach().cpu().numpy())
@@ -183,7 +195,7 @@ class IVSFFingerprintGenerator:
                 with torch.no_grad():
                     x_adv = torch.clamp(x + delta, 0.0, 1.0)
                     p_adv = softmax_probs(self.model(normalize_batch(x_adv, self.mean, self.std)))
-#指纹对应的预测标签
+
                 pred_label = int(torch.argmax(p_adv, dim=1).item())
 
                 sample_candidates.append((x_adv, delta, p_adv, score_dict))
@@ -216,7 +228,7 @@ class IVSFFingerprintGenerator:
             top_scores = []
             top_pred_labels = []
 
-            for idx in top_idx:
+            for rank_in_sample, idx in enumerate(top_idx):
                 x_adv, delta, p_adv, score_dict = sample_candidates[int(idx)]
                 img_np = x_adv[0].detach().cpu().numpy()
                 del_np = delta[0].detach().cpu().numpy()
@@ -229,6 +241,8 @@ class IVSFFingerprintGenerator:
                 selected_probs.append(prob_np)
                 selected_scores.append(score_val)
                 selected_pred_labels.append(pred_label)
+                selected_base_sample_indices.append(sample_idx)
+                selected_rank_in_sample.append(rank_in_sample)
 
                 top_imgs.append(img_np)
                 top_dels.append(del_np)
@@ -236,12 +250,8 @@ class IVSFFingerprintGenerator:
                 top_scores.append(score_val)
                 top_pred_labels.append(pred_label)
 
-                # Mark selected candidates in the CSV rows.
                 for row in scores_rows:
-                    if (
-                        row["sample_idx"] == sample_idx
-                        and row["candidate_idx"] == int(idx)
-                    ):
+                    if row["sample_idx"] == sample_idx and row["candidate_idx"] == int(idx):
                         row["is_selected"] = 1
                         break
 
@@ -278,6 +288,8 @@ class IVSFFingerprintGenerator:
             "selected_probs": np.stack(selected_probs, axis=0).astype(np.float32),
             "selected_scores": np.array(selected_scores, dtype=np.float32),
             "selected_pred_labels": np.array(selected_pred_labels, dtype=np.int64),
+            "selected_base_sample_indices": np.array(selected_base_sample_indices, dtype=np.int64),
+            "selected_rank_in_sample": np.array(selected_rank_in_sample, dtype=np.int64),
             "selected_images_grouped": np.stack(selected_images_grouped, axis=0).astype(np.float32),
             "selected_deltas_grouped": np.stack(selected_deltas_grouped, axis=0).astype(np.float32),
             "selected_probs_grouped": np.stack(selected_probs_grouped, axis=0).astype(np.float32),
@@ -290,11 +302,38 @@ class IVSFFingerprintGenerator:
             "candidate_pred_labels": np.stack(all_candidates_pred_labels, axis=0).astype(np.int64),
         }
 
+        selected_probs_flat = payload["selected_probs"]
+        n_selected = int(selected_probs_flat.shape[0])
+        mi_ref, mi_per_fingerprint = self._pointwise_mi_from_probs(selected_probs_flat)
+
+        payload["verification_pred_labels"] = payload["selected_pred_labels"].astype(np.int64)
+        payload["verification_mi_per_fingerprint"] = mi_per_fingerprint.astype(np.float32)
+        payload["verification_mi_ref"] = np.array([mi_ref], dtype=np.float32)
+        payload["verification_threshold"] = np.array([self.config.mi_threshold], dtype=np.float32)
+
         npz_path = output_dir / "fingerprints.npz"
         save_npz(npz_path, payload)
 
         csv_path = output_dir / "scores.csv"
         save_scores_csv(csv_path, scores_rows)
+
+        verification_rows: List[Dict] = []
+        for idx in range(n_selected):
+            base_i = int(payload["selected_base_sample_indices"][idx])
+            rank_i = int(payload["selected_rank_in_sample"][idx])
+            verification_rows.append(
+                {
+                    "fingerprint_idx": idx,
+                    "base_sample_idx": base_i,
+                    "dataset_idx": int(payload["base_dataset_indices"][base_i]),
+                    "fingerprint_rank": rank_i,
+                    "pred_label": int(payload["verification_pred_labels"][idx]),
+                    "mi_input_output": float(payload["verification_mi_per_fingerprint"][idx]),
+                }
+            )
+
+        verification_csv_path = output_dir / "verification_info.csv"
+        save_scores_csv(verification_csv_path, verification_rows)
 
         meta = {
             "config": asdict(self.config),
@@ -306,10 +345,18 @@ class IVSFFingerprintGenerator:
             "base_sample_seed": self.config.base_sample_seed,
             "num_candidates_per_sample": self.config.num_candidates_per_sample,
             "top_k_per_sample": self.config.top_k_per_sample,
+            "num_selected_fingerprints": n_selected,
             "elapsed_seconds": elapsed,
+            "offline_verification": {
+                "pred_labels": "selected labels are stored in fingerprints.npz::verification_pred_labels",
+                "mi_per_fingerprint": "stored in fingerprints.npz::verification_mi_per_fingerprint",
+                "mi_ref": mi_ref,
+                "mi_threshold": self.config.mi_threshold,
+                "verification_csv": str(verification_csv_path),
+            },
             "verification_interface": {
                 "status": "placeholder",
-                "note": "Online verification is intentionally not implemented in this stage."
+                "note": "Online verification is intentionally not implemented in this stage.",
             },
         }
         meta_path = output_dir / "meta.json"
@@ -319,7 +366,6 @@ class IVSFFingerprintGenerator:
         save_preview_figure(
             path=fig_path,
             base_images=payload["base_images"],
-            # Use grouped tensors to keep base-fingerprint alignment by sample.
             selected_images=payload["selected_images_grouped"][:, 0],
             deltas=payload["selected_deltas_grouped"][:, 0],
             scores=payload["selected_scores_grouped"][:, 0],
@@ -350,6 +396,7 @@ class IVSFFingerprintGenerator:
         return {
             "fingerprints": npz_path,
             "scores": csv_path,
+            "verification_info": verification_csv_path,
             "meta": meta_path,
             "preview": fig_path,
             "one_base_three_fingerprints": one_case_path,
