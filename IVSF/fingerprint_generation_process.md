@@ -44,6 +44,7 @@
 - steps: 每个候选的优化步数
 - lr: 扰动优化学习率
 - eps_linf: 扰动 L∞ 约束半径
+- candidate_sampling_std: 以边界 delta 为均值做高斯采样时的标准差
 - tau_js: 目标分布差异参考值
 - lambda_boundary, lambda_detect, lambda_js, lambda_stealth: 多目标损失权重
 - score_alpha, score_beta, score_gamma: 筛选评分权重
@@ -100,7 +101,7 @@
 
 实现文件: ivsf_pipeline/generator.py
 
-当前主循环的真实结构是“固定一个基础样本，再在它的局部邻域内优化出多个候选 delta”。
+当前主循环的真实结构是“固定一个基础样本，先优化出一个边界 delta，再围绕它采样多个候选 delta_i”。
 
 对每个基础样本 x 执行:
 
@@ -112,11 +113,11 @@
 - 实际计算为 p_ref = softmax(model(normalize(x)))
 - normalize 使用 CIFAR-10 固定均值方差
 
-3. 对同一个 x 重复 num_candidates_per_sample 次候选优化
-- 每次都独立调用 _single_candidate_optimize(x, y, p_ref)
-- 因而一个基础样本对应的是一个候选集合，而不是单个扰动
+3. 先对同一个 x 执行一次边界扰动优化
+- 调用 _optimize_boundary_delta(x, y, p_ref)
+- 得到该基础样本的边界扰动中心 boundary_delta
 
-4. 单个候选的优化变量是 delta，而不是模型参数
+4. 这一步的优化变量是 delta，而不是模型参数
 - 初始时随机采样:
 
 	delta ~ U(-eps_linf, eps_linf)
@@ -137,15 +138,27 @@
 - 对 total 反向传播并更新 delta
 - 更新后再将 delta 强制截断回 [-eps_linf, eps_linf]
 
-6. 优化结束后，再用最终 delta 重新计算一次 x_adv 和 p_adv
-- 然后基于最终结果计算候选评分
-- 返回值是 delta.detach() 和 score_dict
+6. 优化结束后，得到该基础样本的边界扰动中心 boundary_delta
+
+7. 再围绕 boundary_delta 采样多个候选扰动
+- 对第 i 个候选，先按正态分布采样:
+
+	δ_i ~ P_θ(δ|x) = N(boundary_delta, candidate_sampling_std^2 I)
+
+- 然后把采样结果裁剪回 [-eps_linf, eps_linf]
+- 再构造候选指纹样本:
+
+	x_i^{fp} = clamp(x + δ_i, 0, 1)
+
+8. 每个采样得到的候选指纹都会重新计算 p_adv 和评分
+- 这里不再对每个候选各自做一遍梯度优化
+- 而是把“优化边界中心”和“围绕中心采样候选”拆成两步
 
 因此，代码中的“根据 delta 生成候选指纹”的准确含义是:
 
-- 先在基础样本 x 附近优化得到一个受 L∞ 约束的 delta
-- 再用 x_adv = clamp(x + delta, 0, 1) 得到候选指纹样本
-- 同一个基础样本通过不同随机初值的 delta 重复上述过程，得到多个候选指纹
+- 先在基础样本 x 附近优化得到一个受 L∞ 约束的边界中心扰动 boundary_delta
+- 再以 boundary_delta 为均值、以 candidate_sampling_std 为标准差做高斯采样，得到多个 δ_i
+- 最后由 F(x) = {x + δ_i | δ_i ~ P_θ(δ|x)} 构造同一基础样本的多个候选指纹
 
 ### 6.1 基础样本如何得到多个候选指纹
 
@@ -156,22 +169,29 @@
 1. 固定同一个基础样本 x 和它的参考输出分布 p_ref
 - 也就是在同一个样本局部邻域内寻找多个可区分的扰动点
 
-2. 按 num_candidates_per_sample 重复执行候选生成
-- 每次都重新随机初始化一个 delta
-- 每次都从不同的随机起点出发优化
+2. 先对该基础样本优化出一个 boundary_delta
+- 这个 boundary_delta 表示该样本局部邻域中一个经过损失优化得到的边界扰动中心
 
-3. 每次优化结束后，用最终 delta 构造一个候选指纹
+3. 按 num_candidates_per_sample 重复执行候选采样
+- 每次都从以 boundary_delta 为均值的正态分布中采样一个 delta_i
+- 每次采样后都裁剪回 [-eps_linf, eps_linf]
+
+4. 每次采样完成后，用 delta_i 构造一个候选指纹
 - 对应扰动后的样本 x_adv
-- 对应扰动 delta
+- 对应采样扰动 delta_i
 - 对应输出概率 p_adv
 - 对应候选评分 score_dict
 
-4. 这些候选先全部保存在 sample_candidates 中
-- sample_candidates 的单个元素实际是 (x_adv, delta, p_adv, score_dict)
+5. 这些候选先全部保存在 sample_candidates 中
+- sample_candidates 的单个元素实际是 (x_adv, delta_i, p_adv, score_dict)
 - 也就是说，一个基础样本会先得到一个候选集合
 - 还不会立刻决定哪些是最终指纹
 
-因此，“互选指纹”在当前代码语义里更准确地说是“同一基础样本生成得到的多个候选指纹”，它们共同构成该基础样本的局部指纹集合，再从中筛选最优的若干个。
+因此，“同一基础样本的多个候选指纹”在当前代码里已经更贴近下面这个形式:
+
+- F(x) = {x + δ_i | δ_i ~ P_θ(δ|x)}
+
+其中 P_θ(δ|x) 在当前实现里由“先优化出 boundary_delta，再以它为均值做高斯采样”来近似实现。
 
 ### 6.2 单个候选指纹优化结束后保存了什么
 
@@ -183,7 +203,7 @@
 2. score_dict
 - 包含 S_BU、S_sens、S_stealth、S_total
 - 也包含 final_loss、final_boundary、final_detect、final_js、final_stealth
-- 这些 final_* 来自优化循环最后一步记录的历史值
+- 这些 final_* 是对当前采样候选 delta_i 重新评估得到的损失值
 
 3. scores.csv 对应的一行
 - sample_idx: 第几个基础样本
@@ -303,8 +323,9 @@
 - candidate_probs
 - candidate_scores
 - candidate_pred_labels
+- boundary_deltas
 
-这些字段保留了“每个基础样本下所有候选”的完整历史，便于复查筛选前的候选分布。
+这些字段保留了“每个基础样本下所有候选”和“该基础样本对应的边界扰动中心”的完整历史，便于复查筛选前的候选分布。
 
 ## 9. 指纹标签与互信息准备阶段
 
@@ -407,7 +428,7 @@
 
 1. fingerprints.npz 包含:
 - 基础样本信息:
-	- base_images, base_labels, base_dataset_indices, ref_probs
+	- base_images, base_labels, base_dataset_indices, ref_probs, boundary_deltas
 - 所有候选信息:
 	- candidate_images, candidate_deltas, candidate_probs, candidate_scores, candidate_pred_labels
 - 最终入选指纹的扁平视图:

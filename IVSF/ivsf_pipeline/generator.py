@@ -49,17 +49,15 @@ class IVSFFingerprintGenerator:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.config.seed)
 
-    def _single_candidate_optimize(
+    def _optimize_boundary_delta(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
         p_ref: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+    ) -> torch.Tensor:
         delta = torch.empty_like(x).uniform_(-self.config.eps_linf, self.config.eps_linf)
         delta.requires_grad_(True)
         optimizer = torch.optim.Adam([delta], lr=self.config.lr)
-
-        history = {"loss": [], "l_boundary": [], "l_detect": [], "l_js": [], "l_stealth": []}
 
         for _ in range(self.config.steps):
             x_adv = torch.clamp(x + delta, 0.0, 1.0)
@@ -85,15 +83,33 @@ class IVSFFingerprintGenerator:
             with torch.no_grad():
                 delta.clamp_(-self.config.eps_linf, self.config.eps_linf)
 
-            history["loss"].append(float(total.detach().item()))
-            history["l_boundary"].append(float(l_boundary.detach().item()))
-            history["l_detect"].append(float(l_detect.detach().item()))
-            history["l_js"].append(float(l_js.detach().item()))
-            history["l_stealth"].append(float(l_stealth.detach().item()))
+        return delta.detach()
 
+    def _sample_candidate_delta(self, boundary_delta: torch.Tensor) -> torch.Tensor:
+        sampled_delta = boundary_delta + torch.randn_like(boundary_delta) * self.config.candidate_sampling_std
+        return sampled_delta.clamp(-self.config.eps_linf, self.config.eps_linf)
+
+    def _evaluate_candidate(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        p_ref: torch.Tensor,
+        delta: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, float]]:
         with torch.no_grad():
             x_adv = torch.clamp(x + delta, 0.0, 1.0)
             p_adv = softmax_probs(self.model(normalize_batch(x_adv, self.mean, self.std)))
+
+            l_boundary = boundary_loss(p_adv, y).mean()
+            l_detect = detect_loss(p_ref, p_adv).mean()
+            l_js = js_range_loss(p_ref, p_adv, self.config.tau_js).mean()
+            l_stealth = stealth_loss(delta).mean()
+            total = (
+                self.config.lambda_boundary * l_boundary
+                + self.config.lambda_detect * l_detect
+                + self.config.lambda_js * l_js
+                + self.config.lambda_stealth * l_stealth
+            )
 
             s_bu = boundary_uncertainty_score(p_adv, self.config.bu_margin_lambda).mean()
             s_sens = js_divergence(p_ref, p_adv).mean()
@@ -109,13 +125,13 @@ class IVSFFingerprintGenerator:
             "S_sens": float(s_sens.item()),
             "S_stealth": float(s_stealth.item()),
             "S_total": float(s_total.item()),
-            "final_loss": float(history["loss"][-1]),
-            "final_boundary": float(history["l_boundary"][-1]),
-            "final_detect": float(history["l_detect"][-1]),
-            "final_js": float(history["l_js"][-1]),
-            "final_stealth": float(history["l_stealth"][-1]),
+            "final_loss": float(total.item()),
+            "final_boundary": float(l_boundary.item()),
+            "final_detect": float(l_detect.item()),
+            "final_js": float(l_js.item()),
+            "final_stealth": float(l_stealth.item()),
         }
-        return delta.detach(), scores
+        return x_adv, p_adv, scores
 
     @staticmethod
     def _pointwise_mi_from_probs(selected_probs: np.ndarray, eps: float = 1e-12) -> Tuple[float, np.ndarray]:
@@ -151,6 +167,7 @@ class IVSFFingerprintGenerator:
         base_labels: List[int] = []
         base_dataset_indices: List[int] = []
         ref_probs: List[np.ndarray] = []
+        boundary_deltas: List[np.ndarray] = []
 
         selected_images: List[np.ndarray] = []
         selected_deltas: List[np.ndarray] = []
@@ -187,14 +204,15 @@ class IVSFFingerprintGenerator:
             base_dataset_indices.append(dataset_idx)
             ref_probs.append(p_ref[0].detach().cpu().numpy())
 
+            boundary_delta = self._optimize_boundary_delta(x, y, p_ref)
+            boundary_deltas.append(boundary_delta[0].detach().cpu().numpy())
+
             sample_candidates = []
             sample_candidate_scores = []
 
             for cand_idx in range(self.config.num_candidates_per_sample):
-                delta, score_dict = self._single_candidate_optimize(x, y, p_ref)
-                with torch.no_grad():
-                    x_adv = torch.clamp(x + delta, 0.0, 1.0)
-                    p_adv = softmax_probs(self.model(normalize_batch(x_adv, self.mean, self.std)))
+                delta = self._sample_candidate_delta(boundary_delta)
+                x_adv, p_adv, score_dict = self._evaluate_candidate(x, y, p_ref, delta)
 
                 pred_label = int(torch.argmax(p_adv, dim=1).item())
 
@@ -283,6 +301,7 @@ class IVSFFingerprintGenerator:
             "base_labels": np.array(base_labels, dtype=np.int64),
             "base_dataset_indices": np.array(base_dataset_indices, dtype=np.int64),
             "ref_probs": np.stack(ref_probs, axis=0).astype(np.float32),
+            "boundary_deltas": np.stack(boundary_deltas, axis=0).astype(np.float32),
             "selected_images": np.stack(selected_images, axis=0).astype(np.float32),
             "selected_deltas": np.stack(selected_deltas, axis=0).astype(np.float32),
             "selected_probs": np.stack(selected_probs, axis=0).astype(np.float32),
