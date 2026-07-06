@@ -80,14 +80,17 @@ class IVSFFingerprintGenerator:
             total.backward()
             optimizer.step()
 
-            with torch.no_grad():
-                delta.clamp_(-self.config.eps_linf, self.config.eps_linf)
+            if self.config.enforce_linf_constraint:
+                with torch.no_grad():
+                    delta.clamp_(-self.config.eps_linf, self.config.eps_linf)
 
         return delta.detach()
 
     def _sample_candidate_delta(self, boundary_delta: torch.Tensor) -> torch.Tensor:
         sampled_delta = boundary_delta + torch.randn_like(boundary_delta) * self.config.candidate_sampling_std
-        return sampled_delta.clamp(-self.config.eps_linf, self.config.eps_linf)
+        if self.config.enforce_linf_constraint:
+            return sampled_delta.clamp(-self.config.eps_linf, self.config.eps_linf)
+        return sampled_delta
 
     def _evaluate_candidate(
         self,

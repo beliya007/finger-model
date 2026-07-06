@@ -44,6 +44,7 @@
 - steps: 每个候选的优化步数
 - lr: 扰动优化学习率
 - eps_linf: 扰动 L∞ 约束半径
+- enforce_linf_constraint: 是否启用 L∞ 硬约束截断（当前默认关闭）
 - candidate_sampling_std: 以边界 delta 为均值做高斯采样时的标准差
 - tau_js: 目标分布差异参考值
 - lambda_boundary, lambda_detect, lambda_js, lambda_stealth: 多目标损失权重
@@ -136,7 +137,8 @@
 
 - 计算多目标损失 total
 - 对 total 反向传播并更新 delta
-- 更新后再将 delta 强制截断回 [-eps_linf, eps_linf]
+- 若 enforce_linf_constraint=True，则更新后将 delta 截断回 [-eps_linf, eps_linf]
+- 当前默认 enforce_linf_constraint=False，不做这一步硬截断
 
 6. 优化结束后，得到该基础样本的边界扰动中心 boundary_delta
 
@@ -145,7 +147,7 @@
 
 	δ_i ~ P_θ(δ|x) = N(boundary_delta, candidate_sampling_std^2 I)
 
-- 然后把采样结果裁剪回 [-eps_linf, eps_linf]
+- 若 enforce_linf_constraint=True，再把采样结果裁剪回 [-eps_linf, eps_linf]
 - 再构造候选指纹样本:
 
 	x_i^{fp} = clamp(x + δ_i, 0, 1)

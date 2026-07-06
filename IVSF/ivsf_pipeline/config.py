@@ -24,6 +24,7 @@ class IVSFConfig:
     steps: int = 50
     lr: float = 0.02
     eps_linf: float = 8.0 / 255.0
+    enforce_linf_constraint: bool = False
     candidate_sampling_std: float = 2.0 / 255.0
     tau_js: float = 0.08
 
