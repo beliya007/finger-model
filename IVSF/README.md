@@ -37,6 +37,23 @@
 
 ## 3. 执行命令（只在 IVSF 目录执行）
 
+推荐采用三入口分步流程：
+
+入口1：生成指纹并输出原始标签与互信息
+
+	.\.venv\Scripts\python.exe run_ivsf_fingerprint.py --quick --checkpoint-path ./checkpoints/resnet20_cifar10.pth --device cuda
+
+入口2：训练攻击模型并输出攻击权重
+
+	.\.venv\Scripts\python.exe run_ivsf_attack_train.py --checkpoint-path ./checkpoints/resnet20_cifar10.pth --output-dir ./outputs/attack_run --device cuda
+
+入口3：使用入口1的指纹 + 入口2的攻击模型，输出攻击后标签与互信息并生成对比文件
+
+	.\.venv\Scripts\python.exe run_ivsf_compare.py --fingerprints ./outputs/quick_run/fingerprints.npz --checkpoint-path ./checkpoints/resnet20_cifar10.pth --attacked-checkpoint ./outputs/attack_run/attacked_resnet20_cifar10.pth --output-dir ./outputs/attack_run --device cuda
+
+兼容入口说明：
+- run_ivsf_attack.py 仍可使用，但现在仅做第3步的对比，不再负责训练攻击模型。
+
 快速运行（使用默认 checkpoint 路径）：
 
 	.\.venv\Scripts\python.exe run_ivsf_fingerprint.py --quick
