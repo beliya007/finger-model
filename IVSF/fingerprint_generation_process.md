@@ -57,6 +57,7 @@
 - fingerprints.npz: 所有数组型产物
 - scores.csv: 每个候选的评分明细
 - verification_info.csv: 每个最终入选指纹的验证参考信息
+- prediction_report.md: 每个基础样本及其对应指纹的标签与预测概率分布报告
 - meta.json: 运行配置和统计信息
 - preview.png: 可视化预览图
 - one_base_three_fingerprints.png: 1 个基础样本及其 3 个入选指纹示例图

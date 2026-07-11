@@ -9,6 +9,53 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def _format_prob_dist(probs: np.ndarray, decimals: int = 6) -> str:
+    vals = [f"{float(v):.{decimals}f}" for v in probs.tolist()]
+    return "[" + ", ".join(vals) + "]"
+
+
+def save_prediction_report_md(
+    path: Path,
+    base_labels: np.ndarray,
+    base_probs: np.ndarray,
+    base_dataset_indices: np.ndarray,
+    selected_probs_grouped: np.ndarray,
+    selected_pred_labels_grouped: np.ndarray,
+) -> None:
+    lines: List[str] = []
+    lines.append("# 样本与指纹预测分布报告")
+    lines.append("")
+    lines.append("本文档按基础样本分组，记录原始样本标签与预测概率分布，以及对应指纹的标签与预测概率分布。")
+    lines.append("")
+
+    n_base = int(base_labels.shape[0])
+    for i in range(n_base):
+        base_label = int(base_labels[i])
+        dataset_idx = int(base_dataset_indices[i])
+        base_prob = base_probs[i]
+        base_pred = int(np.argmax(base_prob))
+
+        lines.append(f"## 基础样本 {i}")
+        lines.append("")
+        lines.append(f"- dataset_idx: {dataset_idx}")
+        lines.append(f"- 原始样本真实标签: {base_label}")
+        lines.append(f"- 原始样本预测标签: {base_pred}")
+        lines.append(f"- 原始样本预测概率分布: {_format_prob_dist(base_prob)}")
+        lines.append("")
+
+        n_fp = int(selected_probs_grouped.shape[1])
+        for j in range(n_fp):
+            fp_prob = selected_probs_grouped[i, j]
+            fp_pred = int(selected_pred_labels_grouped[i, j])
+            lines.append(f"### 对应指纹 {j}")
+            lines.append("")
+            lines.append(f"- 指纹标签(预测): {fp_pred}")
+            lines.append(f"- 指纹预测概率分布: {_format_prob_dist(fp_prob)}")
+            lines.append("")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def save_meta(path: Path, meta: Dict) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)

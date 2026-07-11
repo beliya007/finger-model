@@ -15,6 +15,7 @@ from .io_utils import (
     save_meta,
     save_npz,
     save_one_base_with_three_fingerprints,
+    save_prediction_report_md,
     save_preview_figure,
     save_scores_csv,
     save_two_bases_with_three_fingerprints,
@@ -357,6 +358,16 @@ class IVSFFingerprintGenerator:
         verification_csv_path = output_dir / "verification_info.csv"
         save_scores_csv(verification_csv_path, verification_rows)
 
+        prediction_report_path = output_dir / "prediction_report.md"
+        save_prediction_report_md(
+            path=prediction_report_path,
+            base_labels=payload["base_labels"],
+            base_probs=payload["ref_probs"],
+            base_dataset_indices=payload["base_dataset_indices"],
+            selected_probs_grouped=payload["selected_probs_grouped"],
+            selected_pred_labels_grouped=payload["selected_pred_labels_grouped"],
+        )
+
         meta = {
             "config": asdict(self.config),
             "device_used": str(self.device),
@@ -419,6 +430,7 @@ class IVSFFingerprintGenerator:
             "fingerprints": npz_path,
             "scores": csv_path,
             "verification_info": verification_csv_path,
+            "prediction_report": prediction_report_path,
             "meta": meta_path,
             "preview": fig_path,
             "one_base_three_fingerprints": one_case_path,
