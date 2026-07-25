@@ -21,27 +21,40 @@ def js_divergence(p: torch.Tensor, q: torch.Tensor, eps: float = 1e-12) -> torch
     return 0.5 * (kl_pm + kl_qm)
 
 
-def boundary_loss(p_adv: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
-    # Use absolute top-1 margin to move points close to local boundary.
-    p_true = p_adv.gather(1, y_true.view(-1, 1)).squeeze(1)
-    top2 = torch.topk(p_adv, k=2, dim=1).values
-    p_max = top2[:, 0]
-    p_second = top2[:, 1]
-    max_non_true = torch.where((p_true - p_max).abs() < 1e-8, p_second, p_max)
-    return torch.abs(p_true - max_non_true)
+def boundary_loss(logits: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+    """
+    实现公式 (5-2): L_boundary = max_{i!=y} (f_i - f_y)
+    在优化中，我们通过最小化 (f_y - f_max) 来使样本逼近决策边界。
+    """
+    # 获取真实类别的 logit: f_y
+    f_y = logits.gather(1, y_true.view(-1, 1)).squeeze(1)
+    
+    # 获取其余类别的最大 logit: max_{i!=y} f_i
+    # 创建一个 mask 排除掉 y_true
+    mask = torch.ones_like(logits, dtype=torch.bool)
+    mask.scatter_(1, y_true.view(-1, 1), False)
+    f_max_other = logits[mask].view(logits.size(0), -1).max(dim=1).values
+    
+    # 按照公式推导，逼近边界意味着让 f_y - f_max_other 趋近于 0
+    # 在最小化总损失的框架下，我们使用绝对值或直接使用 margin
+    return torch.abs(f_y - f_max_other)
 
 
 def detect_loss(p_ref: torch.Tensor, p_adv: torch.Tensor) -> torch.Tensor:
+    """实现公式 (5-3): L_detect = -D_JS(f(x), f(x+delta))"""
     return -js_divergence(p_ref, p_adv)
 
 
 def js_range_loss(p_ref: torch.Tensor, p_adv: torch.Tensor, tau_js: float) -> torch.Tensor:
+    """实现公式 (5-4): L_js = (D_JS - tau)^2"""
     return (js_divergence(p_ref, p_adv) - tau_js).pow(2)
 
 
 def stealth_loss(delta: torch.Tensor) -> torch.Tensor:
+    """实现公式 (5-5): L_stealth = ||delta||_2^2"""
     flat = delta.view(delta.shape[0], -1)
-    return torch.norm(flat, p=2, dim=1)
+    # 使用平方项，增加对大扰动的惩罚
+    return torch.norm(flat, p=2, dim=1).pow(2)
 
 
 def boundary_uncertainty_score(p_adv: torch.Tensor, margin_lambda: float) -> torch.Tensor:

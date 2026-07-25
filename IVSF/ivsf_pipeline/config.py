@@ -23,18 +23,18 @@ class IVSFConfig:
     # Fingerprint generation
     num_candidates_per_sample: int = 6
     top_k_per_sample: int = 3
-    steps: int = 50
+    steps: int = 100
     lr: float = 0.02
     eps_linf: float = 8.0 / 255.0
-    enforce_linf_constraint: bool = False
-    candidate_sampling_std: float = 2.0 / 255.0
+    enforce_linf_constraint: bool = True
+    candidate_sampling_std: float = 1.0 / 255.0
     tau_js: float = 0.08
 
     # Multi-objective weights
     lambda_boundary: float = 1.0
     lambda_detect: float = 0.6
     lambda_js: float = 0.8
-    lambda_stealth: float = 0.15
+    lambda_stealth: float = 0.5
 
     # Boundary-aware screening score
     bu_margin_lambda: float = 1.0
@@ -81,7 +81,7 @@ class IVSFConfig:
         cfg.num_candidates_per_sample = 24
         cfg.steps = 300
         cfg.lr = 0.01
-        cfg.enforce_linf_constraint = True
+        cfg.enforce_linf_constraint = False
         cfg.candidate_sampling_std = 1.0 / 255.0
         cfg.visualization_count = 12
         return cfg

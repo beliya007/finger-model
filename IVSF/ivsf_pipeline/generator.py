@@ -65,7 +65,8 @@ class IVSFFingerprintGenerator:
             logits_adv = self.model(normalize_batch(x_adv, self.mean, self.std))
             p_adv = softmax_probs(logits_adv)
 
-            l_boundary = boundary_loss(p_adv, y).mean()
+            # 使用 Logits 计算边界损失以避免梯度饱和，符合公式 (5-2)
+            l_boundary = boundary_loss(logits_adv, y).mean()
             l_detect = detect_loss(p_ref, p_adv).mean()
             l_js = js_range_loss(p_ref, p_adv, self.config.tau_js).mean()
             l_stealth = stealth_loss(delta).mean()
@@ -102,9 +103,10 @@ class IVSFFingerprintGenerator:
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, float]]:
         with torch.no_grad():
             x_adv = torch.clamp(x + delta, 0.0, 1.0)
-            p_adv = softmax_probs(self.model(normalize_batch(x_adv, self.mean, self.std)))
+            logits_adv = self.model(normalize_batch(x_adv, self.mean, self.std))
+            p_adv = softmax_probs(logits_adv)
 
-            l_boundary = boundary_loss(p_adv, y).mean()
+            l_boundary = boundary_loss(logits_adv, y).mean()
             l_detect = detect_loss(p_ref, p_adv).mean()
             l_js = js_range_loss(p_ref, p_adv, self.config.tau_js).mean()
             l_stealth = stealth_loss(delta).mean()
