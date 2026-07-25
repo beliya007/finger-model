@@ -1,6 +1,6 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -17,6 +17,8 @@ class IVSFConfig:
     random_base_sampling: bool = True
     # 随机抽样种子。None 表示每次运行随机；设为整数可复现。
     base_sample_seed: Optional[int] = None
+    # 固定基础样本索引。若非空，将优先使用该列表并忽略随机抽样设置。
+    base_sample_indices: List[int] = field(default_factory=lambda: [27251, 22844])
 
     # Fingerprint generation
     num_candidates_per_sample: int = 6

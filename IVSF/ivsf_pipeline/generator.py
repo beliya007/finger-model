@@ -164,6 +164,7 @@ class IVSFFingerprintGenerator:
             num_workers=self.config.num_workers,
             random_subset=self.config.random_base_sampling,
             subset_seed=self.config.base_sample_seed,
+            fixed_indices=self.config.base_sample_indices,
         )
 
         scores_rows: List[Dict] = []

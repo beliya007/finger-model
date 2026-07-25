@@ -25,17 +25,26 @@ def build_cifar10_subset_loader(
     num_workers: int,
     random_subset: bool = True,
     subset_seed: Optional[int] = None,
+    fixed_indices: Optional[List[int]] = None,
 ) -> Tuple[DataLoader, List[int]]:
     root = Path(data_root).expanduser()
     transform = transforms.ToTensor()
     dataset = datasets.CIFAR10(root=str(root), train=True, download=True, transform=transform)
 
-    n = min(num_samples, len(dataset))
-    if random_subset:
-        rng = np.random.default_rng(subset_seed)
-        sampled_indices = rng.choice(len(dataset), size=n, replace=False).tolist()
+    if fixed_indices is not None:
+        sampled_indices = [int(i) for i in fixed_indices]
+        if len(sampled_indices) == 0:
+            raise ValueError("fixed_indices is empty.")
+        for idx in sampled_indices:
+            if idx < 0 or idx >= len(dataset):
+                raise ValueError(f"fixed index out of range: {idx}")
     else:
-        sampled_indices = list(range(n))
+        n = min(num_samples, len(dataset))
+        if random_subset:
+            rng = np.random.default_rng(subset_seed)
+            sampled_indices = rng.choice(len(dataset), size=n, replace=False).tolist()
+        else:
+            sampled_indices = list(range(n))
 
     subset = Subset(dataset, sampled_indices)
     loader = DataLoader(subset, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=True)
