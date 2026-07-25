@@ -9,6 +9,7 @@ from ivsf_pipeline import IVSFConfig, IVSFFingerprintGenerator
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IVSF fingerprint generation (ResNet20 + CIFAR-10)")
     parser.add_argument("--quick", action="store_true", help="Use quick preset.")
+    parser.add_argument("--full", action="store_true", help="Use full preset (same sample/fingerprint count).")
     parser.add_argument("--config-json", type=str, default="", help="JSON string to override config fields.")
     parser.add_argument("--output-dir", type=str, default="", help="Output directory override.")
     parser.add_argument("--checkpoint-path", type=str, default="", help="Path to trained ResNet20 checkpoint.")
@@ -19,7 +20,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    cfg = IVSFConfig.quick() if args.quick else IVSFConfig()
+    if args.quick and args.full:
+        raise ValueError("--quick and --full cannot be used together.")
+
+    if args.full:
+        cfg = IVSFConfig.full()
+    elif args.quick:
+        cfg = IVSFConfig.quick()
+    else:
+        cfg = IVSFConfig()
     if args.config_json:
         cfg = IVSFConfig.from_overrides(json.loads(args.config_json))
 

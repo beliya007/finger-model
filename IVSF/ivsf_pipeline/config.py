@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -17,8 +17,8 @@ class IVSFConfig:
     random_base_sampling: bool = True
     # 随机抽样种子。None 表示每次运行随机；设为整数可复现。
     base_sample_seed: Optional[int] = None
-    # 固定基础样本索引。若非空，将优先使用该列表并忽略随机抽样设置。
-    base_sample_indices: List[int] = field(default_factory=lambda: [27251, 22844])
+    # 固定基础样本索引。若为 None 则按随机/顺序采样策略选取。
+    base_sample_indices: Optional[List[int]] = None
 
     # Fingerprint generation
     num_candidates_per_sample: int = 6
@@ -62,6 +62,28 @@ class IVSFConfig:
     def quick(output_dir: str = "./outputs/quick_run") -> "IVSFConfig":
         cfg = IVSFConfig()
         cfg.output_dir = output_dir
+        return cfg
+
+    @staticmethod
+    def full(output_dir: str = "./outputs/full_run") -> "IVSFConfig":
+        cfg = IVSFConfig()
+        cfg.output_dir = output_dir
+
+        # Keep base sample count and final fingerprint count unchanged.
+        cfg.num_base_samples = 2
+        cfg.top_k_per_sample = 3
+
+        # Use a stronger but still practical generation setup.
+        cfg.num_workers = 4
+        cfg.random_base_sampling = True
+        cfg.base_sample_seed = None
+        cfg.base_sample_indices = None
+        cfg.num_candidates_per_sample = 24
+        cfg.steps = 300
+        cfg.lr = 0.01
+        cfg.enforce_linf_constraint = True
+        cfg.candidate_sampling_std = 1.0 / 255.0
+        cfg.visualization_count = 12
         return cfg
 
     @staticmethod

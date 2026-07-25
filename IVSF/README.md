@@ -50,6 +50,12 @@ python run_ivsf_fingerprint.py --quick --checkpoint-path ./checkpoints/resnet20_
 ```
 *   **产出**：`./outputs/quick_run/fingerprints.npz`
 
+如需使用更完整的训练配置（保持 2 个原始样本、每样本保留 3 个指纹不变），可使用：
+```powershell
+python run_ivsf_fingerprint.py --full --checkpoint-path ./checkpoints/resnet20_cifar10.pth --device cuda
+```
+*   **产出**：`./outputs/full_run/fingerprints.npz`
+
 ### 第二步：后门攻击模型训练
 **描述**：在原始模型基础上进行后门攻击微调（例如 BadNets），生成被攻击后的模型权重。
 ```powershell
@@ -70,6 +76,7 @@ python run_ivsf_compare.py --fingerprints ./outputs/quick_run/fingerprints.npz -
 
 *   `--device`: 指定运行设备 (`cuda` 或 `cpu`)。
 *   `--quick`: 使用快速预设配置运行。
+*   `--full`: 使用完整预设配置运行（样本数量与最终指纹数量不变）。
 *   `--attacked-checkpoint`: 手动指定要加载的攻击模型权重路径。
 *   `--checkpoint-path`: 原始干净模型的权重路径。
 
@@ -78,4 +85,8 @@ python run_ivsf_compare.py --fingerprints ./outputs/quick_run/fingerprints.npz -
 *   **攻击类型**：当前已实现 BadNets 风格后门攻击（右下角触发器）。
 *   **权重加载**：程序内置了 Key 自动转换逻辑，兼容从 BIVBench 或 chenyaofo/pytorch-cifar-models 来源的 ResNet20 权重。
 *   **GPU 优化**：所有训练流程默认支持 AMP 自动混合精度加速与非阻塞数据搬运。
+
+
+
+----------------------------------------------------------------------------
 

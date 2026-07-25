@@ -149,6 +149,76 @@ class IVSFFingerprintGenerator:
         local_mi = np.sum(probs * (np.log(probs) - np.log(p_marginal)), axis=1)
         return float(local_mi.mean()), local_mi.astype(np.float32)
 
+    @staticmethod
+    def _build_stealth_metrics(
+        base_images: np.ndarray,
+        selected_images: np.ndarray,
+        selected_base_sample_indices: np.ndarray,
+        selected_rank_in_sample: np.ndarray,
+        base_dataset_indices: np.ndarray,
+    ) -> Tuple[List[Dict], Dict[str, float]]:
+        rows: List[Dict] = []
+        l_inf_vals: List[float] = []
+        l2_vals: List[float] = []
+        mae_vals: List[float] = []
+        rmse_vals: List[float] = []
+        psnr_vals: List[float] = []
+
+        for i in range(int(selected_images.shape[0])):
+            base_i = int(selected_base_sample_indices[i])
+            rank_i = int(selected_rank_in_sample[i])
+
+            base = base_images[base_i]
+            fp = selected_images[i]
+            diff = fp - base
+
+            abs_diff = np.abs(diff)
+            mse = float(np.mean(diff * diff))
+            rmse = float(np.sqrt(mse))
+            l_inf = float(np.max(abs_diff))
+            l2 = float(np.linalg.norm(diff.reshape(-1), ord=2))
+            mae = float(np.mean(abs_diff))
+            psnr_db = float(10.0 * np.log10(1.0 / max(mse, 1e-12)))
+
+            rows.append(
+                {
+                    "fingerprint_idx": i,
+                    "base_sample_idx": base_i,
+                    "dataset_idx": int(base_dataset_indices[base_i]),
+                    "fingerprint_rank": rank_i,
+                    "l_inf": l_inf,
+                    "l2": l2,
+                    "mae": mae,
+                    "rmse": rmse,
+                    "mse": mse,
+                    "psnr_db": psnr_db,
+                }
+            )
+
+            l_inf_vals.append(l_inf)
+            l2_vals.append(l2)
+            mae_vals.append(mae)
+            rmse_vals.append(rmse)
+            psnr_vals.append(psnr_db)
+
+        def _stats(values: List[float]) -> Dict[str, float]:
+            arr = np.array(values, dtype=np.float64)
+            return {
+                "mean": float(arr.mean()),
+                "std": float(arr.std()),
+                "min": float(arr.min()),
+                "max": float(arr.max()),
+            }
+
+        summary = {
+            "l_inf": _stats(l_inf_vals),
+            "l2": _stats(l2_vals),
+            "mae": _stats(mae_vals),
+            "rmse": _stats(rmse_vals),
+            "psnr_db": _stats(psnr_vals),
+        }
+        return rows, summary
+
     def run(self) -> Dict[str, Path]:
         self._set_seed()
         output_dir = self.config.ensure_output_dir()
@@ -359,6 +429,16 @@ class IVSFFingerprintGenerator:
         verification_csv_path = output_dir / "verification_info.csv"
         save_scores_csv(verification_csv_path, verification_rows)
 
+        stealth_rows, stealth_summary = self._build_stealth_metrics(
+            base_images=payload["base_images"],
+            selected_images=payload["selected_images"],
+            selected_base_sample_indices=payload["selected_base_sample_indices"],
+            selected_rank_in_sample=payload["selected_rank_in_sample"],
+            base_dataset_indices=payload["base_dataset_indices"],
+        )
+        stealth_csv_path = output_dir / "stealth_metrics.csv"
+        save_scores_csv(stealth_csv_path, stealth_rows)
+
         prediction_report_path = output_dir / "prediction_report.md"
         save_prediction_report_md(
             path=prediction_report_path,
@@ -387,6 +467,11 @@ class IVSFFingerprintGenerator:
                 "mi_ref": mi_ref,
                 "mi_threshold": self.config.mi_threshold,
                 "verification_csv": str(verification_csv_path),
+            },
+            "stealth_metrics": {
+                "metric_note": "computed from effective perturbation (selected_image - base_image) in [0,1] pixel space",
+                "csv": str(stealth_csv_path),
+                "summary": stealth_summary,
             },
             "verification_interface": {
                 "status": "placeholder",
@@ -431,6 +516,7 @@ class IVSFFingerprintGenerator:
             "fingerprints": npz_path,
             "scores": csv_path,
             "verification_info": verification_csv_path,
+            "stealth_metrics": stealth_csv_path,
             "prediction_report": prediction_report_path,
             "meta": meta_path,
             "preview": fig_path,
