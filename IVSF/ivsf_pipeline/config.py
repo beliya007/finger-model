@@ -14,8 +14,6 @@ class IVSFConfig:
     num_screen_samples: int = 10
     # 筛选后保留的基础样本数 (topk)
     num_selected_bases: int = 2
-    # 待生成指纹的原始样本数量 (Legacy, 可选)
-    num_base_samples: int = 2
     num_workers: int = 2
     # 每次是否随机抽取基础样本
     random_base_sampling: bool = True
@@ -26,7 +24,6 @@ class IVSFConfig:
 
     # Fingerprint generation
     num_candidates_per_sample: int = 6
-    top_k_per_sample: int = 3
     steps: int = 100
     lr: float = 0.02
     eps_linf: float = 8.0 / 255.0
@@ -44,16 +41,12 @@ class IVSFConfig:
     bu_margin_lambda: float = 1.0
     score_alpha: float = 1.0
     score_beta: float = 1.0
-    score_gamma: float = 0.2
 
     # Outputs
     output_dir: str = "./outputs/quick_run"
     visualization_count: int = 12
 
-    # Offline verification artifacts (label + input-output MI)
-    mi_pca_components_input: int = 16
-    mi_pca_components_output: int = 8
-    mi_ksg_k: int = 3
+    # Offline verification threshold
     mi_threshold: float = 0.05
 
     # Model
@@ -75,18 +68,17 @@ class IVSFConfig:
         cfg = IVSFConfig()
         cfg.output_dir = output_dir
 
-        # Keep base sample count and final fingerprint count unchanged.
-        cfg.num_screen_samples = 50
-        cfg.num_selected_bases = 5
-        cfg.num_base_samples = 5
-        cfg.top_k_per_sample = 3
+        # Use a larger screening set while keeping selected base count unchanged.
+        cfg.num_screen_samples = 100
+        cfg.num_selected_bases = 2
 
         # Use a stronger but still practical generation setup.
         cfg.num_workers = 4
         cfg.random_base_sampling = True
         cfg.base_sample_seed = None
         cfg.base_sample_indices = None
-        cfg.num_candidates_per_sample = 24
+        #每个基础样本生成的候选指纹数量
+        cfg.num_candidates_per_sample = 3
         cfg.steps = 300
         cfg.lr = 0.01
         cfg.enforce_linf_constraint = False

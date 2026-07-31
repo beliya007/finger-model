@@ -482,7 +482,6 @@ class IVSFFingerprintGenerator:
             "random_base_sampling": self.config.random_base_sampling,
             "base_sample_seed": self.config.base_sample_seed,
             "num_candidates_per_sample": self.config.num_candidates_per_sample,
-            "top_k_per_sample": self.config.top_k_per_sample,
             "num_selected_fingerprints": n_selected,
             "elapsed_seconds": elapsed,
             "offline_verification": {
