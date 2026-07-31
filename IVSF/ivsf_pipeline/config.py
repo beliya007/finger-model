@@ -10,7 +10,11 @@ class IVSFConfig:
 
     # Dataset
     data_root: str = "./data"
-    # 待生成指纹的原始样本数量
+    # 筛选阶段的基础样本池大小 (n)
+    num_screen_samples: int = 10
+    # 筛选后保留的基础样本数 (topk)
+    num_selected_bases: int = 2
+    # 待生成指纹的原始样本数量 (Legacy, 可选)
     num_base_samples: int = 2
     num_workers: int = 2
     # 每次是否随机抽取基础样本
@@ -62,6 +66,8 @@ class IVSFConfig:
     def quick(output_dir: str = "./outputs/quick_run") -> "IVSFConfig":
         cfg = IVSFConfig()
         cfg.output_dir = output_dir
+        cfg.num_screen_samples = 5
+        cfg.num_selected_bases = 2
         return cfg
 
     @staticmethod
@@ -70,7 +76,9 @@ class IVSFConfig:
         cfg.output_dir = output_dir
 
         # Keep base sample count and final fingerprint count unchanged.
-        cfg.num_base_samples = 2
+        cfg.num_screen_samples = 50
+        cfg.num_selected_bases = 5
+        cfg.num_base_samples = 5
         cfg.top_k_per_sample = 3
 
         # Use a stronger but still practical generation setup.

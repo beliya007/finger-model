@@ -123,7 +123,6 @@ class IVSFFingerprintGenerator:
             s_total = (
                 self.config.score_alpha * s_bu
                 + self.config.score_beta * s_sens
-                - self.config.score_gamma * s_stealth
             )
 
         scores = {
@@ -232,7 +231,7 @@ class IVSFFingerprintGenerator:
 
         loader, sampled_indices = build_cifar10_subset_loader(
             data_root=self.config.data_root,
-            num_samples=self.config.num_base_samples,
+            num_samples=self.config.num_screen_samples,
             num_workers=self.config.num_workers,
             random_subset=self.config.random_base_sampling,
             subset_seed=self.config.base_sample_seed,
@@ -268,13 +267,66 @@ class IVSFFingerprintGenerator:
 
         start_t = time.time()
 
-        for sample_idx, (x, y) in enumerate(loader):
-            dataset_idx = int(sampled_indices[sample_idx])
+        screening_pool: List[Dict] = []
+        for screen_idx, (x, y) in enumerate(loader):
+            dataset_idx = int(sampled_indices[screen_idx])
             x = x.to(self.device)
             y = y.to(self.device)
 
             with torch.no_grad():
                 p_ref = softmax_probs(self.model(normalize_batch(x, self.mean, self.std)))
+
+            random_delta = torch.empty_like(x).uniform_(-self.config.eps_linf, self.config.eps_linf)
+            if self.config.enforce_linf_constraint:
+                random_delta = random_delta.clamp(-self.config.eps_linf, self.config.eps_linf)
+
+            _, p_adv_screen, screen_score = self._evaluate_candidate(x, y, p_ref, random_delta)
+            screen_pred_label = int(torch.argmax(p_adv_screen, dim=1).item())
+
+            screening_pool.append(
+                {
+                    "dataset_idx": dataset_idx,
+                    "x": x,
+                    "y": y,
+                    "p_ref": p_ref,
+                    "base_label": int(y.item()),
+                    "screen_score": float(screen_score["S_total"]),
+                }
+            )
+
+            scores_rows.append(
+                {
+                    "phase": "screen",
+                    "sample_idx": screen_idx,
+                    "dataset_idx": dataset_idx,
+                    "candidate_idx": -1,
+                    "base_label": int(y.item()),
+                    "candidate_pred_label": screen_pred_label,
+                    "is_selected": 0,
+                    **screen_score,
+                }
+            )
+
+        if not screening_pool:
+            raise RuntimeError("No samples are available for screening.")
+
+        screening_scores = np.array([item["screen_score"] for item in screening_pool], dtype=np.float32)
+        screening_order = np.argsort(screening_scores)[::-1]
+        n_selected_bases = min(self.config.num_selected_bases, len(screening_pool))
+        selected_screen_indices = screening_order[:n_selected_bases]
+
+        for idx in selected_screen_indices:
+            for row in scores_rows:
+                if row["phase"] == "screen" and row["sample_idx"] == int(idx):
+                    row["is_selected"] = 1
+                    break
+
+        for selected_sample_idx, source_idx in enumerate(selected_screen_indices):
+            source_item = screening_pool[int(source_idx)]
+            dataset_idx = int(source_item["dataset_idx"])
+            x = source_item["x"]
+            y = source_item["y"]
+            p_ref = source_item["p_ref"]
 
             base_images.append(x[0].detach().cpu().numpy())
             base_labels.append(int(y.item()))
@@ -284,47 +336,16 @@ class IVSFFingerprintGenerator:
             boundary_delta = self._optimize_boundary_delta(x, y, p_ref)
             boundary_deltas.append(boundary_delta[0].detach().cpu().numpy())
 
-            sample_candidates = []
-            sample_candidate_scores = []
-
-            for cand_idx in range(self.config.num_candidates_per_sample):
-                delta = self._sample_candidate_delta(boundary_delta)
-                x_adv, p_adv, score_dict = self._evaluate_candidate(x, y, p_ref, delta)
-
-                pred_label = int(torch.argmax(p_adv, dim=1).item())
-
-                sample_candidates.append((x_adv, delta, p_adv, score_dict))
-                sample_candidate_scores.append(score_dict["S_total"])
-
-                row = {
-                    "sample_idx": sample_idx,
-                    "dataset_idx": dataset_idx,
-                    "candidate_idx": cand_idx,
-                    "base_label": int(y.item()),
-                    "candidate_pred_label": pred_label,
-                    "is_selected": 0,
-                    **score_dict,
-                }
-                scores_rows.append(row)
-
-            order = np.argsort(np.array(sample_candidate_scores))[::-1]
-            k = min(self.config.top_k_per_sample, len(order))
-            top_idx = order[:k]
-
             cand_imgs = []
             cand_dels = []
             cand_probs = []
             cand_scores = []
             cand_pred_labels = []
 
-            top_imgs = []
-            top_dels = []
-            top_probs = []
-            top_scores = []
-            top_pred_labels = []
+            for cand_idx in range(self.config.num_candidates_per_sample):
+                delta = self._sample_candidate_delta(boundary_delta)
+                x_adv, p_adv, score_dict = self._evaluate_candidate(x, y, p_ref, delta)
 
-            for rank_in_sample, idx in enumerate(top_idx):
-                x_adv, delta, p_adv, score_dict = sample_candidates[int(idx)]
                 img_np = x_adv[0].detach().cpu().numpy()
                 del_np = delta[0].detach().cpu().numpy()
                 prob_np = p_adv[0].detach().cpu().numpy()
@@ -336,34 +357,33 @@ class IVSFFingerprintGenerator:
                 selected_probs.append(prob_np)
                 selected_scores.append(score_val)
                 selected_pred_labels.append(pred_label)
-                selected_base_sample_indices.append(sample_idx)
-                selected_rank_in_sample.append(rank_in_sample)
+                selected_base_sample_indices.append(selected_sample_idx)
+                selected_rank_in_sample.append(cand_idx)
 
-                top_imgs.append(img_np)
-                top_dels.append(del_np)
-                top_probs.append(prob_np)
-                top_scores.append(score_val)
-                top_pred_labels.append(pred_label)
-
-                for row in scores_rows:
-                    if row["sample_idx"] == sample_idx and row["candidate_idx"] == int(idx):
-                        row["is_selected"] = 1
-                        break
-
-            if top_imgs:
-                selected_images_grouped.append(np.stack(top_imgs, axis=0))
-                selected_deltas_grouped.append(np.stack(top_dels, axis=0))
-                selected_probs_grouped.append(np.stack(top_probs, axis=0))
-                selected_scores_grouped.append(np.array(top_scores, dtype=np.float32))
-                selected_pred_labels_grouped.append(np.array(top_pred_labels, dtype=np.int64))
-
-            for x_adv, delta, p_adv, score_dict in sample_candidates:
-                prob_np = p_adv[0].detach().cpu().numpy()
-                cand_imgs.append(x_adv[0].detach().cpu().numpy())
-                cand_dels.append(delta[0].detach().cpu().numpy())
+                cand_imgs.append(img_np)
+                cand_dels.append(del_np)
                 cand_probs.append(prob_np)
-                cand_scores.append(float(score_dict["S_total"]))
-                cand_pred_labels.append(int(np.argmax(prob_np)))
+                cand_scores.append(score_val)
+                cand_pred_labels.append(pred_label)
+
+                scores_rows.append(
+                    {
+                        "phase": "generation",
+                        "sample_idx": selected_sample_idx,
+                        "dataset_idx": dataset_idx,
+                        "candidate_idx": cand_idx,
+                        "base_label": int(y.item()),
+                        "candidate_pred_label": pred_label,
+                        "is_selected": 1,
+                        **score_dict,
+                    }
+                )
+
+            selected_images_grouped.append(np.stack(cand_imgs, axis=0))
+            selected_deltas_grouped.append(np.stack(cand_dels, axis=0))
+            selected_probs_grouped.append(np.stack(cand_probs, axis=0))
+            selected_scores_grouped.append(np.array(cand_scores, dtype=np.float32))
+            selected_pred_labels_grouped.append(np.array(cand_pred_labels, dtype=np.int64))
 
             all_candidates_images.append(np.stack(cand_imgs, axis=0))
             all_candidates_deltas.append(np.stack(cand_dels, axis=0))
@@ -456,6 +476,8 @@ class IVSFFingerprintGenerator:
             "device_used": str(self.device),
             "checkpoint_path": str(self.checkpoint_path),
             "num_processed_samples": len(base_images),
+            "num_screen_samples": len(screening_pool),
+            "num_selected_bases": n_selected_bases,
             "base_dataset_indices": base_dataset_indices,
             "random_base_sampling": self.config.random_base_sampling,
             "base_sample_seed": self.config.base_sample_seed,
