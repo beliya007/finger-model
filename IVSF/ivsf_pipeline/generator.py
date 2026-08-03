@@ -25,7 +25,6 @@ from .losses import (
     boundary_uncertainty_score,
     detect_loss,
     js_divergence,
-    js_range_loss,
     softmax_probs,
     stealth_loss,
 )
@@ -68,13 +67,11 @@ class IVSFFingerprintGenerator:
             # 使用 Logits 计算边界损失以避免梯度饱和，符合公式 (5-2)
             l_boundary = boundary_loss(logits_adv, y).mean()
             l_detect = detect_loss(p_ref, p_adv).mean()
-            l_js = js_range_loss(p_ref, p_adv, self.config.tau_js).mean()
             l_stealth = stealth_loss(delta).mean()
 
             total = (
                 self.config.lambda_boundary * l_boundary
                 + self.config.lambda_detect * l_detect
-                + self.config.lambda_js * l_js
                 + self.config.lambda_stealth * l_stealth
             )
 
@@ -108,12 +105,10 @@ class IVSFFingerprintGenerator:
 
             l_boundary = boundary_loss(logits_adv, y).mean()
             l_detect = detect_loss(p_ref, p_adv).mean()
-            l_js = js_range_loss(p_ref, p_adv, self.config.tau_js).mean()
             l_stealth = stealth_loss(delta).mean()
             total = (
                 self.config.lambda_boundary * l_boundary
                 + self.config.lambda_detect * l_detect
-                + self.config.lambda_js * l_js
                 + self.config.lambda_stealth * l_stealth
             )
 
@@ -133,7 +128,6 @@ class IVSFFingerprintGenerator:
             "final_loss": float(total.item()),
             "final_boundary": float(l_boundary.item()),
             "final_detect": float(l_detect.item()),
-            "final_js": float(l_js.item()),
             "final_stealth": float(l_stealth.item()),
         }
         return x_adv, p_adv, scores

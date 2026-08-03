@@ -29,12 +29,10 @@ class IVSFConfig:
     eps_linf: float = 8.0 / 255.0
     enforce_linf_constraint: bool = True
     candidate_sampling_std: float = 1.0 / 255.0
-    tau_js: float = 0.08
 
     # Multi-objective weights
     lambda_boundary: float = 1.0
     lambda_detect: float = 0.6
-    lambda_js: float = 0.8
     lambda_stealth: float = 0.5
 
     # Boundary-aware screening score
@@ -77,12 +75,19 @@ class IVSFConfig:
         cfg.random_base_sampling = True
         cfg.base_sample_seed = None
         cfg.base_sample_indices = None
-        #每个基础样本生成的候选指纹数量
+        # 每个基础样本生成的候选指纹数量
         cfg.num_candidates_per_sample = 3
-        cfg.steps = 300
-        cfg.lr = 0.01
-        cfg.enforce_linf_constraint = False
-        cfg.candidate_sampling_std = 1.0 / 255.0
+
+        # 实测更自然外观的一组默认参数（降低模糊感）
+        cfg.steps = 220
+        cfg.lr = 0.004
+        cfg.eps_linf = 3.0 / 255.0
+        cfg.enforce_linf_constraint = True
+        cfg.candidate_sampling_std = 0.25 / 255.0
+
+        cfg.lambda_boundary = 0.2
+        cfg.lambda_detect = 1.5
+        cfg.lambda_stealth = 3.0
         cfg.visualization_count = 12
         return cfg
 

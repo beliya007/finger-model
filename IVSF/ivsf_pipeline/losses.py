@@ -23,8 +23,7 @@ def js_divergence(p: torch.Tensor, q: torch.Tensor, eps: float = 1e-12) -> torch
 
 def boundary_loss(logits: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     """
-    实现公式 (5-2): L_boundary = max_{i!=y} (f_i - f_y)
-    在优化中，我们通过最小化 (f_y - f_max) 来使样本逼近决策边界。
+    实现公式 (5-2): L_boundary = max(0, f_y - max_{i!=y} f_i)
     """
     # 获取真实类别的 logit: f_y
     f_y = logits.gather(1, y_true.view(-1, 1)).squeeze(1)
@@ -35,19 +34,13 @@ def boundary_loss(logits: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     mask.scatter_(1, y_true.view(-1, 1), False)
     f_max_other = logits[mask].view(logits.size(0), -1).max(dim=1).values
     
-    # 按照公式推导，逼近边界意味着让 f_y - f_max_other 趋近于 0
-    # 在最小化总损失的框架下，我们使用绝对值或直接使用 margin
-    return torch.abs(f_y - f_max_other)
+    margin = f_y - f_max_other
+    return torch.clamp(margin, min=0.0)
 
 
 def detect_loss(p_ref: torch.Tensor, p_adv: torch.Tensor) -> torch.Tensor:
-    """实现公式 (5-3): L_detect = -D_JS(f(x), f(x+delta))"""
-    return -js_divergence(p_ref, p_adv)
-
-
-def js_range_loss(p_ref: torch.Tensor, p_adv: torch.Tensor, tau_js: float) -> torch.Tensor:
-    """实现公式 (5-4): L_js = (D_JS - tau)^2"""
-    return (js_divergence(p_ref, p_adv) - tau_js).pow(2)
+    """实现公式 (5-3): L_detect = D_JS(f(x), f(x+delta))"""
+    return js_divergence(p_ref, p_adv)
 
 
 def stealth_loss(delta: torch.Tensor) -> torch.Tensor:
