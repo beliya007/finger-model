@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from dataclasses import asdict
@@ -18,6 +19,7 @@ from .io_utils import (
     save_prediction_report_md,
     save_preview_figure,
     save_scores_csv,
+    save_timing_summary,
     save_two_bases_with_three_fingerprints,
 )
 from .losses import (
@@ -125,6 +127,7 @@ class IVSFFingerprintGenerator:
             "S_sens": float(s_sens.item()),
             "S_stealth": float(s_stealth.item()),
             "S_total": float(s_total.item()),
+            "js_to_base": float(s_sens.item()),
             "final_loss": float(total.item()),
             "final_boundary": float(l_boundary.item()),
             "final_detect": float(l_detect.item()),
@@ -243,6 +246,7 @@ class IVSFFingerprintGenerator:
         selected_deltas: List[np.ndarray] = []
         selected_probs: List[np.ndarray] = []
         selected_scores: List[float] = []
+        selected_js_to_base: List[float] = []
         selected_pred_labels: List[int] = []
         selected_base_sample_indices: List[int] = []
         selected_rank_in_sample: List[int] = []
@@ -259,7 +263,12 @@ class IVSFFingerprintGenerator:
         all_candidates_scores: List[np.ndarray] = []
         all_candidates_pred_labels: List[np.ndarray] = []
 
-        start_t = time.time()
+        start_t = time.perf_counter()
+        screening_elapsed = 0.0
+        selection_elapsed = 0.0
+        optimization_elapsed_by_base: List[float] = []
+        generation_elapsed_by_base: List[float] = []
+        generation_elapsed_by_fingerprint: List[float] = []
 
         screening_pool: List[Dict] = []
         for screen_idx, (x, y) in enumerate(loader):
@@ -267,6 +276,7 @@ class IVSFFingerprintGenerator:
             x = x.to(self.device)
             y = y.to(self.device)
 
+            screen_start = time.perf_counter()
             with torch.no_grad():
                 p_ref = softmax_probs(self.model(normalize_batch(x, self.mean, self.std)))
 
@@ -275,6 +285,7 @@ class IVSFFingerprintGenerator:
                 random_delta = random_delta.clamp(-self.config.eps_linf, self.config.eps_linf)
 
             _, p_adv_screen, screen_score = self._evaluate_candidate(x, y, p_ref, random_delta)
+            screening_elapsed += time.perf_counter() - screen_start
             screen_pred_label = int(torch.argmax(p_adv_screen, dim=1).item())
 
             screening_pool.append(
@@ -304,10 +315,12 @@ class IVSFFingerprintGenerator:
         if not screening_pool:
             raise RuntimeError("No samples are available for screening.")
 
+        select_start = time.perf_counter()
         screening_scores = np.array([item["screen_score"] for item in screening_pool], dtype=np.float32)
         screening_order = np.argsort(screening_scores)[::-1]
         n_selected_bases = min(self.config.num_selected_bases, len(screening_pool))
         selected_screen_indices = screening_order[:n_selected_bases]
+        selection_elapsed += time.perf_counter() - select_start
 
         for idx in selected_screen_indices:
             for row in scores_rows:
@@ -327,7 +340,9 @@ class IVSFFingerprintGenerator:
             base_dataset_indices.append(dataset_idx)
             ref_probs.append(p_ref[0].detach().cpu().numpy())
 
+            optimize_start = time.perf_counter()
             boundary_delta = self._optimize_boundary_delta(x, y, p_ref)
+            optimization_elapsed_by_base.append(time.perf_counter() - optimize_start)
             boundary_deltas.append(boundary_delta[0].detach().cpu().numpy())
 
             cand_imgs = []
@@ -336,9 +351,12 @@ class IVSFFingerprintGenerator:
             cand_scores = []
             cand_pred_labels = []
 
+            base_generation_start = time.perf_counter()
             for cand_idx in range(self.config.num_candidates_per_sample):
+                candidate_start = time.perf_counter()
                 delta = self._sample_candidate_delta(boundary_delta)
                 x_adv, p_adv, score_dict = self._evaluate_candidate(x, y, p_ref, delta)
+                generation_elapsed_by_fingerprint.append(time.perf_counter() - candidate_start)
 
                 img_np = x_adv[0].detach().cpu().numpy()
                 del_np = delta[0].detach().cpu().numpy()
@@ -350,6 +368,7 @@ class IVSFFingerprintGenerator:
                 selected_deltas.append(del_np)
                 selected_probs.append(prob_np)
                 selected_scores.append(score_val)
+                selected_js_to_base.append(float(score_dict["js_to_base"]))
                 selected_pred_labels.append(pred_label)
                 selected_base_sample_indices.append(selected_sample_idx)
                 selected_rank_in_sample.append(cand_idx)
@@ -372,6 +391,7 @@ class IVSFFingerprintGenerator:
                         **score_dict,
                     }
                 )
+            generation_elapsed_by_base.append(time.perf_counter() - base_generation_start)
 
             selected_images_grouped.append(np.stack(cand_imgs, axis=0))
             selected_deltas_grouped.append(np.stack(cand_dels, axis=0))
@@ -385,7 +405,7 @@ class IVSFFingerprintGenerator:
             all_candidates_scores.append(np.array(cand_scores, dtype=np.float32))
             all_candidates_pred_labels.append(np.array(cand_pred_labels, dtype=np.int64))
 
-        elapsed = time.time() - start_t
+        elapsed = time.perf_counter() - start_t
 
         payload = {
             "base_images": np.stack(base_images, axis=0).astype(np.float32),
@@ -397,6 +417,7 @@ class IVSFFingerprintGenerator:
             "selected_deltas": np.stack(selected_deltas, axis=0).astype(np.float32),
             "selected_probs": np.stack(selected_probs, axis=0).astype(np.float32),
             "selected_scores": np.array(selected_scores, dtype=np.float32),
+            "selected_js_to_base": np.array(selected_js_to_base, dtype=np.float32),
             "selected_pred_labels": np.array(selected_pred_labels, dtype=np.int64),
             "selected_base_sample_indices": np.array(selected_base_sample_indices, dtype=np.int64),
             "selected_rank_in_sample": np.array(selected_rank_in_sample, dtype=np.int64),
@@ -418,6 +439,7 @@ class IVSFFingerprintGenerator:
 
         payload["verification_pred_labels"] = payload["selected_pred_labels"].astype(np.int64)
         payload["verification_mi_per_fingerprint"] = mi_per_fingerprint.astype(np.float32)
+        payload["verification_js_to_base"] = payload["selected_js_to_base"].astype(np.float32)
         payload["verification_mi_ref"] = np.array([mi_ref], dtype=np.float32)
         payload["verification_threshold"] = np.array([self.config.mi_threshold], dtype=np.float32)
 
@@ -439,6 +461,7 @@ class IVSFFingerprintGenerator:
                     "fingerprint_rank": rank_i,
                     "pred_label": int(payload["verification_pred_labels"][idx]),
                     "mi_input_output": float(payload["verification_mi_per_fingerprint"][idx]),
+                    "js_divergence_to_base": float(payload["verification_js_to_base"][idx]),
                 }
             )
 
@@ -465,6 +488,26 @@ class IVSFFingerprintGenerator:
             selected_pred_labels_grouped=payload["selected_pred_labels_grouped"],
         )
 
+        timing_summary = {
+            "total_seconds": float(elapsed),
+            "candidate_selection_seconds": float(screening_elapsed),
+            "candidate_selection_from_dataset_seconds": float(screening_elapsed),
+            "candidate_selection_topk_seconds": float(selection_elapsed),
+            "optimization_seconds_per_candidate_base": [float(v) for v in optimization_elapsed_by_base],
+            "optimization_seconds_per_candidate_base_mean": float(np.mean(optimization_elapsed_by_base)) if optimization_elapsed_by_base else 0.0,
+            "generation_seconds_per_candidate_base": [float(v) for v in generation_elapsed_by_base],
+            "generation_seconds_per_candidate_base_mean": float(np.mean(generation_elapsed_by_base)) if generation_elapsed_by_base else 0.0,
+            "generation_seconds_per_fingerprint": [float(v) for v in generation_elapsed_by_fingerprint],
+            "avg_generation_seconds_per_fingerprint": float(np.mean(generation_elapsed_by_fingerprint)) if generation_elapsed_by_fingerprint else 0.0,
+            "num_screen_samples": int(len(screening_pool)),
+            "num_selected_bases": int(n_selected_bases),
+            "num_candidates_per_sample": int(self.config.num_candidates_per_sample),
+            "num_generated_fingerprints": int(n_selected),
+        }
+
+        timing_path = output_dir / "timing_summary.json"
+        save_timing_summary(timing_path, timing_summary)
+
         meta = {
             "config": asdict(self.config),
             "device_used": str(self.device),
@@ -478,9 +521,11 @@ class IVSFFingerprintGenerator:
             "num_candidates_per_sample": self.config.num_candidates_per_sample,
             "num_selected_fingerprints": n_selected,
             "elapsed_seconds": elapsed,
+            "timing": timing_summary,
             "offline_verification": {
                 "pred_labels": "selected labels are stored in fingerprints.npz::verification_pred_labels",
                 "mi_per_fingerprint": "stored in fingerprints.npz::verification_mi_per_fingerprint",
+                "js_divergence_to_base": "stored in fingerprints.npz::verification_js_to_base",
                 "mi_ref": mi_ref,
                 "mi_threshold": self.config.mi_threshold,
                 "verification_csv": str(verification_csv_path),
@@ -497,6 +542,9 @@ class IVSFFingerprintGenerator:
         }
         meta_path = output_dir / "meta.json"
         save_meta(meta_path, meta)
+
+        print("[IVSF] timing summary:")
+        print(json.dumps(timing_summary, ensure_ascii=False, indent=2))
 
         fig_path = output_dir / "preview.png"
         save_preview_figure(
@@ -536,6 +584,7 @@ class IVSFFingerprintGenerator:
             "stealth_metrics": stealth_csv_path,
             "prediction_report": prediction_report_path,
             "meta": meta_path,
+            "timing_summary": timing_path,
             "preview": fig_path,
             "one_base_three_fingerprints": one_case_path,
             "two_bases_three_fingerprints": two_case_path,

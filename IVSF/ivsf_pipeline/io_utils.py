@@ -61,6 +61,11 @@ def save_meta(path: Path, meta: Dict) -> None:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
 
+def save_timing_summary(path: Path, timing_summary: Dict) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(timing_summary, f, indent=2, ensure_ascii=False)
+
+
 def save_scores_csv(path: Path, rows: List[Dict]) -> None:
     if not rows:
         return
