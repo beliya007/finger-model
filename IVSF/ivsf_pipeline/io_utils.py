@@ -108,16 +108,12 @@ def save_preview_figure(
         delta_vis = (delta - delta.min()) / (delta.max() - delta.min() + 1e-8)
 
         axes[i, 0].imshow(base)
-        axes[i, 0].set_title("base")
         axes[i, 1].imshow(fp)
-        axes[i, 1].set_title("fingerprint")
         axes[i, 2].imshow(delta_vis)
-        axes[i, 2].set_title("delta")
-        axes[i, 3].bar(["score"], [float(scores[i])])
-        axes[i, 3].set_ylim(min(0.0, float(scores[i]) - 0.1), max(0.1, float(scores[i]) + 0.1))
+        axes[i, 3].bar([], [])
 
         for j in range(4):
-            axes[i, j].axis("off" if j < 3 else "on")
+            axes[i, j].axis("off")
 
     fig.tight_layout()
     fig.savefig(path, dpi=180)
@@ -141,12 +137,10 @@ def save_one_base_with_three_fingerprints(
         axes = np.array([axes])
 
     axes[0].imshow(_to_hwc(base_image))
-    axes[0].set_title(f"base (idx={dataset_idx}, y={label})")
     axes[0].axis("off")
 
     for i in range(n_fp):
         axes[i + 1].imshow(_to_hwc(fingerprint_images[i]))
-        axes[i + 1].set_title(f"fp{i+1}  score={float(fingerprint_scores[i]):.4f}")
         axes[i + 1].axis("off")
 
     fig.tight_layout()
@@ -173,16 +167,11 @@ def save_two_bases_with_three_fingerprints(
 
     for r in range(n_rows):
         axes[r, 0].imshow(_to_hwc(base_images[r]))
-        axes[r, 0].set_title(f"base (idx={int(base_dataset_indices[r])}, y={int(base_labels[r])})")
         axes[r, 0].axis("off")
 
         n_fp = min(3, int(fingerprint_images_grouped.shape[1]))
         for c in range(n_fp):
             axes[r, c + 1].imshow(_to_hwc(fingerprint_images_grouped[r, c]))
-            axes[r, c + 1].set_title(
-                f"fp{c+1} y_hat={int(fingerprint_pred_labels_grouped[r, c])}\n"
-                f"score={float(fingerprint_scores_grouped[r, c]):.4f}"
-            )
             axes[r, c + 1].axis("off")
 
     fig.tight_layout()

@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
+from lpips import LPIPS as LPIPSModel
 
 from .config import IVSFConfig
 from .data import build_cifar10_subset_loader, cifar10_mean_std, normalize_batch
@@ -44,6 +45,8 @@ class IVSFFingerprintGenerator:
         )
 
         self.mean, self.std = cifar10_mean_std(self.device)
+        self.lpips_model = LPIPSModel(net="alex", version="0.1").to(self.device)
+        self.lpips_model.eval()
 
     def _set_seed(self) -> None:
         torch.manual_seed(self.config.seed)
@@ -93,6 +96,17 @@ class IVSFFingerprintGenerator:
             return sampled_delta.clamp(-self.config.eps_linf, self.config.eps_linf)
         return sampled_delta
 
+    def _compute_lpips(self, base_image: torch.Tensor, fingerprint_image: torch.Tensor) -> float:
+        with torch.no_grad():
+            base_tensor = base_image.clone().to(self.device)
+            fp_tensor = fingerprint_image.clone().to(self.device)
+            if base_tensor.ndim == 3:
+                base_tensor = base_tensor.unsqueeze(0)
+                fp_tensor = fp_tensor.unsqueeze(0)
+            base_tensor = (base_tensor * 2.0) - 1.0
+            fp_tensor = (fp_tensor * 2.0) - 1.0
+            return float(self.lpips_model(base_tensor, fp_tensor).item())
+
     def _evaluate_candidate(
         self,
         x: torch.Tensor,
@@ -122,12 +136,15 @@ class IVSFFingerprintGenerator:
                 + self.config.score_beta * s_sens
             )
 
+        lpips_score = self._compute_lpips(x, x_adv)
+
         scores = {
             "S_BU": float(s_bu.item()),
             "S_sens": float(s_sens.item()),
             "S_stealth": float(s_stealth.item()),
             "S_total": float(s_total.item()),
             "js_to_base": float(s_sens.item()),
+            "lpips_to_base": float(lpips_score),
             "final_loss": float(total.item()),
             "final_boundary": float(l_boundary.item()),
             "final_detect": float(l_detect.item()),
@@ -247,6 +264,7 @@ class IVSFFingerprintGenerator:
         selected_probs: List[np.ndarray] = []
         selected_scores: List[float] = []
         selected_js_to_base: List[float] = []
+        selected_lpips_to_base: List[float] = []
         selected_pred_labels: List[int] = []
         selected_base_sample_indices: List[int] = []
         selected_rank_in_sample: List[int] = []
@@ -369,6 +387,7 @@ class IVSFFingerprintGenerator:
                 selected_probs.append(prob_np)
                 selected_scores.append(score_val)
                 selected_js_to_base.append(float(score_dict["js_to_base"]))
+                selected_lpips_to_base.append(float(score_dict["lpips_to_base"]))
                 selected_pred_labels.append(pred_label)
                 selected_base_sample_indices.append(selected_sample_idx)
                 selected_rank_in_sample.append(cand_idx)
@@ -418,6 +437,7 @@ class IVSFFingerprintGenerator:
             "selected_probs": np.stack(selected_probs, axis=0).astype(np.float32),
             "selected_scores": np.array(selected_scores, dtype=np.float32),
             "selected_js_to_base": np.array(selected_js_to_base, dtype=np.float32),
+            "selected_lpips_to_base": np.array(selected_lpips_to_base, dtype=np.float32),
             "selected_pred_labels": np.array(selected_pred_labels, dtype=np.int64),
             "selected_base_sample_indices": np.array(selected_base_sample_indices, dtype=np.int64),
             "selected_rank_in_sample": np.array(selected_rank_in_sample, dtype=np.int64),
@@ -440,6 +460,7 @@ class IVSFFingerprintGenerator:
         payload["verification_pred_labels"] = payload["selected_pred_labels"].astype(np.int64)
         payload["verification_mi_per_fingerprint"] = mi_per_fingerprint.astype(np.float32)
         payload["verification_js_to_base"] = payload["selected_js_to_base"].astype(np.float32)
+        payload["verification_lpips_to_base"] = payload["selected_lpips_to_base"].astype(np.float32)
         payload["verification_mi_ref"] = np.array([mi_ref], dtype=np.float32)
         payload["verification_threshold"] = np.array([self.config.mi_threshold], dtype=np.float32)
 
@@ -462,6 +483,7 @@ class IVSFFingerprintGenerator:
                     "pred_label": int(payload["verification_pred_labels"][idx]),
                     "mi_input_output": float(payload["verification_mi_per_fingerprint"][idx]),
                     "js_divergence_to_base": float(payload["verification_js_to_base"][idx]),
+                    "lpips_to_base": float(payload["verification_lpips_to_base"][idx]),
                 }
             )
 
