@@ -81,6 +81,62 @@ python run_ivsf_compare.py --fingerprints ./outputs/quick_run/fingerprints.npz -
     *   `fingerprint_attack_comparison.csv`
     *   `fingerprint_attack_comparison.npz`
 
+### 补充：三种对比实验指纹生成（SSF / PublicCheck / MiSentry）
+**描述**：生成三种对比方法的指纹文件，便于后续统一做完整性验证或攻击对比。
+```powershell
+python run_baseline_fingerprints.py --methods ssf,publiccheck,misentry --checkpoint-path ./checkpoints/resnet20_cifar10.pth --output-root ./outputs/baseline_fingerprints --device cuda
+```
+*   **产出目录**：
+    *   `./outputs/baseline_fingerprints/ssf/`
+    *   `./outputs/baseline_fingerprints/publiccheck/`
+    *   `./outputs/baseline_fingerprints/misentry/`
+*   **每个方法目录产出**：
+    *   `fingerprints.npz`（可直接给 `run_ivsf_compare.py --fingerprints` 使用）
+    *   `fingerprints.npy`（兼容 BIVBench 的 `--fp_path` 用法）
+    *   `meta.json`
+
+说明：
+*   SSF 仓库已放到 `../third_party/Sensitive_Sample_Fingerprinting`，用于对照与参考。
+*   当前脚本在 CIFAR-10 + ResNet20 流程下给出统一可运行的三方法基线实现，方便与你现有 IVSF 流程直接联动。
+
+#### 对比方案按 IVSF full 规模运行（推荐用于论文主表）
+为保证与 `outputs/full_run/fingerprints.npz` 的 IVSF 结果同规模，建议使用如下配置（每个方法 30 枚指纹）：
+
+```powershell
+..\.venv\Scripts\python.exe run_baseline_fingerprints.py --methods ssf,publiccheck,misentry --output-root ./outputs/baseline_fingerprints_full --checkpoint-path ./checkpoints/resnet20_cifar10.pth --device cuda --num-screen-samples 300 --num-selected-bases 10 --num-candidates-per-base 3 --steps 220 --lr 0.004 --l2-radius 3.0 --seed 1337
+```
+
+生成 full 对 full 指标表（LPIPS/JS）：
+```powershell
+..\.venv\Scripts\python.exe -c "exec('''import csv\nimport numpy as np\nimport torch\nfrom pathlib import Path\nfrom lpips import LPIPS as LPIPSModel\nfrom ivsf_pipeline.model import load_resnet20_cifar10\nfrom ivsf_pipeline.data import cifar10_mean_std, normalize_batch\nfrom ivsf_pipeline.losses import softmax_probs, js_divergence\n\ndevice = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\nmodel, _ = load_resnet20_cifar10(Path('./checkpoints/resnet20_cifar10.pth'), device=device)\nmodel.eval()\nmean, std = cifar10_mean_std(device)\nlpips_model = LPIPSModel(net='alex', version='0.1').to(device)\nlpips_model.eval()\n\nmethods = [('MiSentry', Path('outputs/baseline_fingerprints_full/misentry/fingerprints.npz')), ('SSF', Path('outputs/baseline_fingerprints_full/ssf/fingerprints.npz')), ('PublicCheck', Path('outputs/baseline_fingerprints_full/publiccheck/fingerprints.npz')), ('IVSF', Path('outputs/full_run/fingerprints.npz'))]\nrows = []\nfor name, p in methods:\n    d = np.load(p, allow_pickle=False)\n    fps = d['selected_images'].astype(np.float32)\n    bases = d['base_images'].astype(np.float32)\n    base_idx = d['selected_base_sample_indices'].astype(np.int64)\n    if 'selected_probs' in d.files:\n        fp_probs = d['selected_probs'].astype(np.float32)\n    else:\n        x = torch.from_numpy(fps).to(device=device, dtype=torch.float32)\n        out = []\n        with torch.no_grad():\n            for i in range(0, x.shape[0], 256):\n                logits = model(normalize_batch(x[i:i+256], mean, std))\n                out.append(softmax_probs(logits).detach().cpu().numpy())\n        fp_probs = np.concatenate(out, axis=0).astype(np.float32)\n    b = torch.from_numpy(bases).to(device=device, dtype=torch.float32)\n    with torch.no_grad():\n        base_logits = model(normalize_batch(b, mean, std))\n        base_probs = softmax_probs(base_logits)\n    js_vals, lpips_vals = [], []\n    for i in range(fps.shape[0]):\n        bi = int(base_idx[i])\n        p_ref = base_probs[bi:bi+1]\n        p_fp = torch.from_numpy(fp_probs[i:i+1]).to(device=device, dtype=torch.float32)\n        js_vals.append(float(js_divergence(p_ref, p_fp).item()))\n        base_img = torch.from_numpy(bases[bi:bi+1]).to(device=device, dtype=torch.float32)\n        fp_img = torch.from_numpy(fps[i:i+1]).to(device=device, dtype=torch.float32)\n        lpips_vals.append(float(lpips_model(base_img * 2.0 - 1.0, fp_img * 2.0 - 1.0).item()))\n    rows.append({'Dataset':'CIFAR-10','Method':name,'LPIPS':float(np.mean(lpips_vals)),'JS':float(np.mean(js_vals)),'num_fingerprints':int(fps.shape[0]),'source_fingerprints':str(p).replace('\\\\','/')})\nout_csv = Path('outputs/baseline_fingerprints_full/cifar10_method_lpips_js_full_vs_ivsf_full.csv')\nwith out_csv.open('w', newline='', encoding='utf-8') as f:\n    w = csv.DictWriter(f, fieldnames=['Dataset','Method','LPIPS','JS','num_fingerprints','source_fingerprints'])\n    w.writeheader()\n    w.writerows(rows)\nprint(out_csv)\n''')"
+```
+
+*   **产出文件**：
+    *   `./outputs/baseline_fingerprints_full/cifar10_method_lpips_js_full_vs_ivsf_full.csv`
+    *   `./outputs/baseline_fingerprints_full/cifar10_method_lpips_js_full_vs_ivsf_full.md`
+
+### 补充：纵向指纹对比图生成（原图 + IVSF + MiSentry + SSF + PublicCheck）
+**描述**：将同一基础样本下的 5 张图按纵向拼接，便于论文插图或直观对比。
+
+先生成与基线方法同样本索引对齐的 IVSF 指纹（示例索引：46043, 47328）：
+```powershell
+..\.venv\Scripts\python.exe -c "from ivsf_pipeline import IVSFConfig, IVSFFingerprintGenerator; cfg=IVSFConfig.quick(output_dir='./outputs/ivsf_baseline_aligned'); cfg.num_screen_samples=8; cfg.num_selected_bases=2; cfg.num_candidates_per_sample=2; cfg.steps=60; cfg.lr=0.01; cfg.base_sample_indices=[46043,47328]; cfg.random_base_sampling=False; cfg.enforce_linf_constraint=True; cfg.eps_linf=3.0/255.0; cfg.candidate_sampling_std=1.0/255.0; cfg.checkpoint_path='./checkpoints/resnet20_cifar10.pth'; cfg.device='cuda'; IVSFFingerprintGenerator(cfg).run()"
+```
+
+生成带标题的纵向对比图：
+```powershell
+..\.venv\Scripts\python.exe -c "import numpy as np; import matplotlib.pyplot as plt; from pathlib import Path; iv=np.load('outputs/ivsf_baseline_aligned/fingerprints.npz'); mi=np.load('outputs/baseline_fingerprints_quick/misentry/fingerprints.npz'); ss=np.load('outputs/baseline_fingerprints_quick/ssf/fingerprints.npz'); pc=np.load('outputs/baseline_fingerprints_quick/publiccheck/fingerprints.npz'); base_idx=0; rank=0; orig=iv['base_images'][base_idx]; iv_img=iv['selected_images'][np.where((iv['selected_base_sample_indices']==base_idx)&(iv['selected_rank_in_sample']==rank))[0][0]]; mi_img=mi['selected_images'][np.where((mi['selected_base_sample_indices']==base_idx)&(mi['selected_rank_in_sample']==rank))[0][0]]; ss_img=ss['selected_images'][np.where((ss['selected_base_sample_indices']==base_idx)&(ss['selected_rank_in_sample']==rank))[0][0]]; pc_img=pc['selected_images'][np.where((pc['selected_base_sample_indices']==base_idx)&(pc['selected_rank_in_sample']==rank))[0][0]]; labels=['Original sample','IVSF fingerprint','MiSentry fingerprint','SSF fingerprint','PublicCheck fingerprint']; imgs=[orig,iv_img,mi_img,ss_img,pc_img]; fig,axes=plt.subplots(5,1,figsize=(4,18)); [ax.imshow(np.clip(np.transpose(img,(1,2,0)),0,1)) or ax.set_title(lab,fontsize=12) or ax.axis('off') for ax,img,lab in zip(axes,imgs,labels)]; fig.tight_layout(); out=Path('outputs/baseline_fingerprints_quick/vertical_fingerprint_comparison.png'); fig.savefig(out,dpi=220); print(out)"
+```
+
+生成无文字说明版本（纯图版）：
+```powershell
+..\.venv\Scripts\python.exe -c "import numpy as np; import matplotlib.pyplot as plt; from pathlib import Path; iv=np.load('outputs/ivsf_baseline_aligned/fingerprints.npz'); mi=np.load('outputs/baseline_fingerprints_quick/misentry/fingerprints.npz'); ss=np.load('outputs/baseline_fingerprints_quick/ssf/fingerprints.npz'); pc=np.load('outputs/baseline_fingerprints_quick/publiccheck/fingerprints.npz'); base_idx=0; rank=0; orig=iv['base_images'][base_idx]; iv_img=iv['selected_images'][np.where((iv['selected_base_sample_indices']==base_idx)&(iv['selected_rank_in_sample']==rank))[0][0]]; mi_img=mi['selected_images'][np.where((mi['selected_base_sample_indices']==base_idx)&(mi['selected_rank_in_sample']==rank))[0][0]]; ss_img=ss['selected_images'][np.where((ss['selected_base_sample_indices']==base_idx)&(ss['selected_rank_in_sample']==rank))[0][0]]; pc_img=pc['selected_images'][np.where((pc['selected_base_sample_indices']==base_idx)&(pc['selected_rank_in_sample']==rank))[0][0]]; imgs=[orig,iv_img,mi_img,ss_img,pc_img]; fig,axes=plt.subplots(5,1,figsize=(3.6,16)); plt.subplots_adjust(left=0,right=1,top=1,bottom=0,hspace=0.02); [ax.imshow(np.clip(np.transpose(img,(1,2,0)),0,1)) or ax.axis('off') for ax,img in zip(axes,imgs)]; out=Path('outputs/baseline_fingerprints_quick/vertical_fingerprint_comparison_no_text.png'); fig.savefig(out,dpi=260,bbox_inches='tight',pad_inches=0); print(out)"
+```
+
+*   **产出文件**：
+    *   `./outputs/baseline_fingerprints_quick/vertical_fingerprint_comparison.png`
+    *   `./outputs/baseline_fingerprints_quick/vertical_fingerprint_comparison_no_text.png`
+
 ## 4. 参数说明
 
 ### 4.1 指纹生成脚本
