@@ -67,8 +67,8 @@ class IVSFConfig:
         cfg.output_dir = output_dir
 
         # Use a larger screening set while keeping selected base count unchanged.
-        cfg.num_screen_samples = 100
-        cfg.num_selected_bases = 2
+        cfg.num_screen_samples = 300
+        cfg.num_selected_bases = 10
 
         # Use a stronger but still practical generation setup.
         cfg.num_workers = 4

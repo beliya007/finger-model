@@ -164,6 +164,20 @@ class IVSFFingerprintGenerator:
         local_mi = np.sum(probs * (np.log(probs) - np.log(p_marginal)), axis=1)
         return float(local_mi.mean()), local_mi.astype(np.float32)
 
+    def _predict_probs_for_images(self, images: np.ndarray, batch_size: int = 256) -> np.ndarray:
+        x = torch.from_numpy(images).to(device=self.device, dtype=torch.float32)
+        probs_all: List[np.ndarray] = []
+
+        self.model.eval()
+        with torch.no_grad():
+            for i in range(0, x.shape[0], batch_size):
+                xb = x[i : i + batch_size]
+                logits = self.model(normalize_batch(xb, self.mean, self.std))
+                probs = softmax_probs(logits)
+                probs_all.append(probs.detach().cpu().numpy())
+
+        return np.concatenate(probs_all, axis=0).astype(np.float32)
+
     @staticmethod
     def _build_stealth_metrics(
         base_images: np.ndarray,
@@ -456,12 +470,17 @@ class IVSFFingerprintGenerator:
         selected_probs_flat = payload["selected_probs"]
         n_selected = int(selected_probs_flat.shape[0])
         mi_ref, mi_per_fingerprint = self._pointwise_mi_from_probs(selected_probs_flat)
+        rerun_probs = self._predict_probs_for_images(payload["selected_images"])
+        rerun_mi_ref, rerun_mi_per_fingerprint = self._pointwise_mi_from_probs(rerun_probs)
 
         payload["verification_pred_labels"] = payload["selected_pred_labels"].astype(np.int64)
         payload["verification_mi_per_fingerprint"] = mi_per_fingerprint.astype(np.float32)
+        payload["verification_probs_rerun"] = rerun_probs.astype(np.float32)
+        payload["verification_mi_per_fingerprint_moin"] = rerun_mi_per_fingerprint.astype(np.float32)
         payload["verification_js_to_base"] = payload["selected_js_to_base"].astype(np.float32)
         payload["verification_lpips_to_base"] = payload["selected_lpips_to_base"].astype(np.float32)
         payload["verification_mi_ref"] = np.array([mi_ref], dtype=np.float32)
+        payload["verification_mi_ref_moin"] = np.array([rerun_mi_ref], dtype=np.float32)
         payload["verification_threshold"] = np.array([self.config.mi_threshold], dtype=np.float32)
 
         npz_path = output_dir / "fingerprints.npz"
@@ -474,6 +493,8 @@ class IVSFFingerprintGenerator:
         for idx in range(n_selected):
             base_i = int(payload["selected_base_sample_indices"][idx])
             rank_i = int(payload["selected_rank_in_sample"][idx])
+            verification_mi_value = float(payload["verification_mi_per_fingerprint"][idx])
+            verification_mi_moin_value = float(payload["verification_mi_per_fingerprint_moin"][idx])
             verification_rows.append(
                 {
                     "fingerprint_idx": idx,
@@ -481,7 +502,9 @@ class IVSFFingerprintGenerator:
                     "dataset_idx": int(payload["base_dataset_indices"][base_i]),
                     "fingerprint_rank": rank_i,
                     "pred_label": int(payload["verification_pred_labels"][idx]),
-                    "mi_input_output": float(payload["verification_mi_per_fingerprint"][idx]),
+                    "mi_input_output": verification_mi_value,
+                    "mi_input_output_moin": verification_mi_moin_value,
+                    "abs_mi_diff": abs(verification_mi_value - verification_mi_moin_value),
                     "js_divergence_to_base": float(payload["verification_js_to_base"][idx]),
                     "lpips_to_base": float(payload["verification_lpips_to_base"][idx]),
                 }
