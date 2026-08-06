@@ -70,7 +70,7 @@ python run_ivsf_attack_train.py --checkpoint-path ./checkpoints/resnet20_cifar10
 python run_ivsf_attack_train.py --checkpoint-path ./checkpoints/resnet20_cifar10.pth --output-dir ./outputs/attack_run_300ep --device cuda --epochs 300
 
 # 第三步：使用 full 指纹，对 300 轮攻击模型做对比
-python run_ivsf_compare.py --fingerprints ./outputs/full_run/fingerprints.npz --checkpoint-path ./checkpoints/resnet20_cifar10.pth --attacked-checkpoint ./outputs/attack_run_300ep/attacked_resnet20_cifar10.pth --output-dir ./outputs/attack_run_300ep --device cuda
+python run_ivsf_compare.py --fingerprints ./outputs/full_run/fingerprints.npz --checkpoint-path ./checkpoints/resnet20_cifar10.pth --attacked-checkpoint ./outputs/attack_run_400ep/attacked_resnet20_cifar10.pth --output-dir ./outputs/attack_run_400ep --device cuda
 
 ### 第三步：指纹一致性对比与评估
 **描述**：将第一步生成的指纹输入给第二步产生的攻击模型，对比攻击前后的标签变化与点互信息变化。

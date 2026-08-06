@@ -83,15 +83,18 @@ def compare_fingerprints_on_models(
 
     rows: List[Dict[str, object]] = []
     for i in range(clean_labels.shape[0]):
+        clean_mi_value = float(clean_mi[i])
+        attacked_mi_value = float(attacked_mi[i])
         rows.append(
             {
                 "fingerprint_idx": int(i),
                 "base_sample_idx": int(base_indices[i]),
                 "fingerprint_rank_in_sample": int(rank_in_sample[i]),
                 "orig_pred_label": int(clean_labels[i]),
-                "orig_mi": float(clean_mi[i]),
+                "orig_mi": clean_mi_value,
                 "attacked_pred_label": int(attacked_labels[i]),
-                "attacked_mi": float(attacked_mi[i]),
+                "attacked_mi": attacked_mi_value,
+                "abs_mi_diff": abs(clean_mi_value - attacked_mi_value),
             }
         )
 
