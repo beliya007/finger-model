@@ -20,6 +20,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=str, default="./outputs/attack_run", help="Output directory")
     parser.add_argument("--device", type=str, default="", help="cuda or cpu")
     parser.add_argument("--attacked-checkpoint", type=str, default="", help="Attacked model checkpoint path")
+    parser.add_argument(
+        "--attack-type",
+        type=str,
+        default="badnet",
+        choices=["badnet", "trojan", "clean_label_backdoor", "weight_pruning", "ftll"],
+        help="Used only when --attacked-checkpoint is empty",
+    )
     return parser.parse_args()
 
 
@@ -32,7 +39,11 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    attacked_ckpt = Path(args.attacked_checkpoint) if args.attacked_checkpoint else get_default_attacked_checkpoint_path(args.output_dir)
+    attacked_ckpt = (
+        Path(args.attacked_checkpoint)
+        if args.attacked_checkpoint
+        else get_default_attacked_checkpoint_path(args.output_dir, args.attack_type)
+    )
 
     attack_result = load_attacked_model_checkpoint(attacked_ckpt, device=device)
     attacked_model = attack_result["attacked_model"]

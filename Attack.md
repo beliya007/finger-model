@@ -95,26 +95,12 @@ BIVBench 的攻击体系基于 WRT 抽象层，核心是“创建攻击对象 + 
 2. 指纹在 clean vs attacked 模型上的差异对比
 
 尚未实现（优先级从高到低建议）：
-1. 权值剪枝 Weight Pruning
+1. 权值剪枝 Weight Pruning（移除15%）
 - 意义：最经典模型篡改/压缩方式，最先验证指纹鲁棒性
 
 2. 微调家族 FTLL / FTAL / FZLL / RTLL / RTAL
 - 意义：不引入后门，仅通过训练策略变化破坏指纹
 
-3. 蒸馏 Model Distillation
-- 意义：黑盒所有权验证里最关键的替身模型场景
-
-4. 量化 Weight Quantization
-- 意义：部署侧常见，直接影响指纹可分辨性
-
-5. Fine-Pruning / TransferLearning
-- 意义：更强对抗场景，可评估指纹跨域稳定性
-
-6. 输入变换攻击族（JPEG、Noising、Smoothing、FeatureSqueezing）
-- 意义：测试推理前处理对指纹统计特征的影响
-
-7. Neural Cleanse / Laundering
-- 意义：后门清洗防御反向作用下，检验指纹保真度
 
 ---
 
@@ -136,15 +122,12 @@ BIVBench 的攻击体系基于 WRT 抽象层，核心是“创建攻击对象 + 
 BIVBench 是“多攻击范式的统一可配置平台”；当前 IVSF 属于其中的“后门投毒 + 微调”子类。若要对齐 BIVBench 的评估深度，下一步应优先补齐 Weight Pruning、FT 系列和 Distillation 三类攻击。
 在 BIVBench 的 backdoor_attack 这套流程里，主要有 4 种攻击方式（对应 task）：
 
-backdoor，BadNets 风格后门攻击（右下角方块触发器 + 目标标签重标）
+backdoor，BadNets 风格后门攻击（右下角方块触发器 + 目标标签重标）====已有
 trojan
 clean_label_backdoor
-data_poison
-另外，data_poison 下面还细分两种投毒粒度：
-
-sample 级投毒
-class 级投毒
-并且还支持一个“vulnerable_targeted_attack”开关，用来做更定向的 targeted 攻击。
+权值剪枝 Weight Pruning（移除15%）
+微调：以 10−5 的学习率微调最后一层
+。
 
 
 
