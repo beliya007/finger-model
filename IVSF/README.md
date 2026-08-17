@@ -65,6 +65,29 @@ python run_ivsf_attack_train.py --checkpoint-path ./checkpoints/resnet20_cifar10
 ```
 *   **产出**：`./outputs/attack_run/attacked_resnet20_cifar10.pth`
 
+### 第二步补充：批量训练 5 种攻击（默认 400 轮）
+**描述**：一次顺序跑完 5 种攻击，统一输出到同一个根目录下的不同子目录。
+```powershell
+python run_ivsf_attack_train_batch.py --checkpoint-path ./checkpoints/resnet20_cifar10.pth --output-root ./outputs/attack_runs_400ep --device cuda
+```
+*   **默认攻击顺序**：`badnet,trojan,clean_label_backdoor,weight_pruning,ftll`
+*   **默认训练轮数**：
+    *   `badnet / trojan / clean_label_backdoor`: 400 轮
+    *   `ftll`: 400 轮
+    *   `weight_pruning`: 不依赖 epoch，直接做 15% 权值剪枝
+*   **默认输出结构**：
+    *   `./outputs/attack_runs_400ep/badnet/`
+    *   `./outputs/attack_runs_400ep/trojan/`
+    *   `./outputs/attack_runs_400ep/clean_label_backdoor/`
+    *   `./outputs/attack_runs_400ep/weight_pruning/`
+    *   `./outputs/attack_runs_400ep/ftll/`
+    *   `./outputs/attack_runs_400ep/batch_attack_summary.json`
+
+```powershell
+# 只跑部分攻击
+python run_ivsf_attack_train_batch.py --checkpoint-path ./checkpoints/resnet20_cifar10.pth --output-root ./outputs/attack_runs_partial --device cuda --attacks badnet,trojan,ftll
+```
+
 ```powershell
 # Trojan 后门
 python run_ivsf_attack_train.py --checkpoint-path ./checkpoints/resnet20_cifar10.pth --output-dir ./outputs/attack_run_trojan --device cuda --attack-type trojan
@@ -200,6 +223,18 @@ python run_ivsf_attack_train.py --checkpoint-path PATH --output-dir PATH [--devi
 *   `--num-workers`: DataLoader 线程数（默认 2）。
 *   `--data-root`: 数据目录（默认 `./data`）。
 *   `--no-amp`: 关闭 AMP 自动混合精度。
+
+### 4.2.1 批量攻击训练脚本
+
+```powershell
+python run_ivsf_attack_train_batch.py --checkpoint-path PATH --output-root PATH [--device cuda|cpu] [--attacks badnet,trojan,clean_label_backdoor,weight_pruning,ftll] [--epochs 400] [--ftll-epochs 400] [--batch-size N] [--lr LR] [--ftll-lr LR] [--poison-ratio R] [--trigger-label C] [--trigger-size N] [--trigger-alpha A] [--trojan-steps N] [--trojan-lr LR] [--trojan-batch-size N] [--clean-label-base-label C] [--clean-label-eps E] [--clean-label-alpha A] [--clean-label-steps N] [--clean-label-max-poison N] [--pruning-ratio R] [--seed N] [--num-workers N] [--data-root PATH] [--no-amp]
+```
+
+*   `--output-root`: 批量运行输出根目录，脚本会为每种攻击创建同名子目录。
+*   `--attacks`: 逗号分隔的攻击列表，默认依次运行全部 5 种攻击。
+*   `--epochs`: `badnet / trojan / clean_label_backdoor` 的训练轮数，默认 400。
+*   `--ftll-epochs`: `ftll` 的训练轮数，默认 400。
+*   `batch_attack_summary.json`: 汇总每种攻击的输出目录、checkpoint、配置和元信息。
 
 ### 4.3 指纹对比脚本
 
