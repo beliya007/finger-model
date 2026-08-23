@@ -3,3 +3,4 @@ IVSF/checkpoints/
 IVSF/outputs/
 IVSF/**/__pycache__/
 *.pyc
+/data/
