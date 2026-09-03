@@ -92,6 +92,15 @@ class IVSFConfig:
         return cfg
 
     @staticmethod
+    def time_evaluation(output_dir: str = "./outputs/cifar10_time_evaluation/ivsf") -> "IVSFConfig":
+        cfg = IVSFConfig.full(output_dir=output_dir)
+        cfg.num_screen_samples = 100
+        cfg.num_selected_bases = 5
+        cfg.num_candidates_per_sample = 3
+        cfg.base_sample_seed = 1337
+        return cfg
+
+    @staticmethod
     def from_overrides(overrides: Dict) -> "IVSFConfig":
         cfg = IVSFConfig()
         for k, v in overrides.items():

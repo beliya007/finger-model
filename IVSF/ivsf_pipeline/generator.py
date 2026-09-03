@@ -54,6 +54,10 @@ class IVSFFingerprintGenerator:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.config.seed)
 
+    def _synchronize_device(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
     def _optimize_boundary_delta(
         self,
         x: torch.Tensor,
@@ -295,6 +299,7 @@ class IVSFFingerprintGenerator:
         all_candidates_scores: List[np.ndarray] = []
         all_candidates_pred_labels: List[np.ndarray] = []
 
+        self._synchronize_device()
         start_t = time.perf_counter()
         screening_elapsed = 0.0
         selection_elapsed = 0.0
@@ -308,6 +313,7 @@ class IVSFFingerprintGenerator:
             x = x.to(self.device)
             y = y.to(self.device)
 
+            self._synchronize_device()
             screen_start = time.perf_counter()
             with torch.no_grad():
                 p_ref = softmax_probs(self.model(normalize_batch(x, self.mean, self.std)))
@@ -317,6 +323,7 @@ class IVSFFingerprintGenerator:
                 random_delta = random_delta.clamp(-self.config.eps_linf, self.config.eps_linf)
 
             _, p_adv_screen, screen_score = self._evaluate_candidate(x, y, p_ref, random_delta)
+            self._synchronize_device()
             screening_elapsed += time.perf_counter() - screen_start
             screen_pred_label = int(torch.argmax(p_adv_screen, dim=1).item())
 
@@ -372,8 +379,10 @@ class IVSFFingerprintGenerator:
             base_dataset_indices.append(dataset_idx)
             ref_probs.append(p_ref[0].detach().cpu().numpy())
 
+            self._synchronize_device()
             optimize_start = time.perf_counter()
             boundary_delta = self._optimize_boundary_delta(x, y, p_ref)
+            self._synchronize_device()
             optimization_elapsed_by_base.append(time.perf_counter() - optimize_start)
             boundary_deltas.append(boundary_delta[0].detach().cpu().numpy())
 
@@ -385,9 +394,11 @@ class IVSFFingerprintGenerator:
 
             base_generation_start = time.perf_counter()
             for cand_idx in range(self.config.num_candidates_per_sample):
+                self._synchronize_device()
                 candidate_start = time.perf_counter()
                 delta = self._sample_candidate_delta(boundary_delta)
                 x_adv, p_adv, score_dict = self._evaluate_candidate(x, y, p_ref, delta)
+                self._synchronize_device()
                 generation_elapsed_by_fingerprint.append(time.perf_counter() - candidate_start)
 
                 img_np = x_adv[0].detach().cpu().numpy()
@@ -438,7 +449,8 @@ class IVSFFingerprintGenerator:
             all_candidates_scores.append(np.array(cand_scores, dtype=np.float32))
             all_candidates_pred_labels.append(np.array(cand_pred_labels, dtype=np.int64))
 
-        elapsed = time.perf_counter() - start_t
+        self._synchronize_device()
+        generation_flow_elapsed = time.perf_counter() - start_t
 
         payload = {
             "base_images": np.stack(base_images, axis=0).astype(np.float32),
@@ -467,11 +479,15 @@ class IVSFFingerprintGenerator:
             "candidate_pred_labels": np.stack(all_candidates_pred_labels, axis=0).astype(np.int64),
         }
 
+        self._synchronize_device()
+        verification_start = time.perf_counter()
         selected_probs_flat = payload["selected_probs"]
         n_selected = int(selected_probs_flat.shape[0])
         mi_ref, mi_per_fingerprint = self._pointwise_mi_from_probs(selected_probs_flat)
         rerun_probs = self._predict_probs_for_images(payload["selected_images"])
         rerun_mi_ref, rerun_mi_per_fingerprint = self._pointwise_mi_from_probs(rerun_probs)
+        self._synchronize_device()
+        verification_elapsed = time.perf_counter() - verification_start
 
         payload["verification_pred_labels"] = payload["selected_pred_labels"].astype(np.int64)
         payload["verification_mi_per_fingerprint"] = mi_per_fingerprint.astype(np.float32)
@@ -534,10 +550,13 @@ class IVSFFingerprintGenerator:
         )
 
         timing_summary = {
-            "total_seconds": float(elapsed),
-            "candidate_selection_seconds": float(screening_elapsed),
+            "total_seconds": float(screening_elapsed + selection_elapsed + sum(optimization_elapsed_by_base) + sum(generation_elapsed_by_base) + verification_elapsed),
+            "candidate_selection_seconds": float(screening_elapsed + selection_elapsed),
             "candidate_selection_from_dataset_seconds": float(screening_elapsed),
             "candidate_selection_topk_seconds": float(selection_elapsed),
+            "fingerprint_generation_seconds": float(sum(optimization_elapsed_by_base) + sum(generation_elapsed_by_base)),
+            "verification_seconds": float(verification_elapsed),
+            "generation_flow_seconds": float(generation_flow_elapsed),
             "optimization_seconds_per_candidate_base": [float(v) for v in optimization_elapsed_by_base],
             "optimization_seconds_per_candidate_base_mean": float(np.mean(optimization_elapsed_by_base)) if optimization_elapsed_by_base else 0.0,
             "generation_seconds_per_candidate_base": [float(v) for v in generation_elapsed_by_base],
@@ -565,7 +584,7 @@ class IVSFFingerprintGenerator:
             "base_sample_seed": self.config.base_sample_seed,
             "num_candidates_per_sample": self.config.num_candidates_per_sample,
             "num_selected_fingerprints": n_selected,
-            "elapsed_seconds": elapsed,
+            "elapsed_seconds": generation_flow_elapsed,
             "timing": timing_summary,
             "offline_verification": {
                 "pred_labels": "selected labels are stored in fingerprints.npz::verification_pred_labels",

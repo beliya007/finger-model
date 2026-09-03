@@ -55,6 +55,11 @@ def _resolve_device(arg_device: str) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def _synchronize_device(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
 def _project_l2(delta: torch.Tensor, radius: float) -> torch.Tensor:
     flat = delta.view(delta.shape[0], -1)
     norm = torch.norm(flat, p=2, dim=1, keepdim=True)
@@ -212,6 +217,7 @@ def _save_method_outputs(
     base_labels: List[int],
     base_dataset_indices: List[int],
     config_dump: Dict[str, object],
+    timing_summary: Dict[str, object],
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -248,6 +254,9 @@ def _save_method_outputs(
     }
     with (output_dir / "meta.json").open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
+
+    with (output_dir / "timing_summary.json").open("w", encoding="utf-8") as f:
+        json.dump(timing_summary, f, indent=2, ensure_ascii=False)
 
 
 def _to_hwc(image_chw: np.ndarray) -> np.ndarray:
@@ -426,7 +435,10 @@ def main() -> None:
         base_dataset_indices: List[int] = []
 
         optimize_fn = optimizers[method]
+        generation_elapsed_by_fingerprint: List[float] = []
 
+        _synchronize_device(device)
+        generation_start = time.perf_counter()
         for base_i, rec in enumerate(chosen):
             x = rec["x"]
             y = rec["y"]
@@ -435,6 +447,8 @@ def main() -> None:
             base_dataset_indices.append(int(rec["dataset_idx"]))
 
             for rank_i in range(args.num_candidates_per_base):
+                _synchronize_device(device)
+                fingerprint_start = time.perf_counter()
                 img_np, prob_np = optimize_fn(
                     model=model,
                     x=x,
@@ -445,11 +459,39 @@ def main() -> None:
                     lr=args.lr,
                     l2_radius=args.l2_radius,
                 )
+                _synchronize_device(device)
+                generation_elapsed_by_fingerprint.append(time.perf_counter() - fingerprint_start)
                 selected_images.append(img_np)
                 selected_probs.append(prob_np)
                 selected_pred_labels.append(int(np.argmax(prob_np)))
                 selected_base_indices.append(base_i)
                 selected_rank_in_sample.append(rank_i)
+
+            _synchronize_device(device)
+            generation_seconds = time.perf_counter() - generation_start
+
+            # Re-run model inference for all generated fingerprints to measure the
+            # online verification query, rather than reusing generation-time logits.
+            generated_images = np.stack(selected_images, axis=0).astype(np.float32)
+            _synchronize_device(device)
+            verification_start = time.perf_counter()
+            verification_probs = _predict_probs(model, generated_images, device, args.batch_size)
+            _ = np.argmax(verification_probs, axis=1)
+            _synchronize_device(device)
+            verification_seconds = time.perf_counter() - verification_start
+            timing_summary = {
+                "candidate_selection_seconds": None,
+                "fingerprint_generation_seconds": float(generation_seconds),
+                "verification_seconds": float(verification_seconds),
+                "total_seconds": float(generation_seconds + verification_seconds),
+                "generation_seconds_per_fingerprint": [float(value) for value in generation_elapsed_by_fingerprint],
+                "avg_generation_seconds_per_fingerprint": float(np.mean(generation_elapsed_by_fingerprint)),
+                "num_screen_samples": int(args.num_screen_samples),
+                "num_selected_bases": int(len(chosen)),
+                "num_candidates_per_base": int(args.num_candidates_per_base),
+                "num_generated_fingerprints": int(len(selected_images)),
+                "device": str(device),
+            }
 
         out_dir = output_root / method
         _save_method_outputs(
@@ -476,6 +518,7 @@ def main() -> None:
                 "seed": args.seed,
                 "base_sample_indices": fixed_indices,
             },
+            timing_summary=timing_summary,
         )
         _save_fingerprint_images(
             output_dir=out_dir,
