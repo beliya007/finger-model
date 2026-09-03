@@ -17,6 +17,7 @@ class IVSFConfig:
     num_workers: int = 2
     # 每次是否随机抽取基础样本
     random_base_sampling: bool = True
+    enable_candidate_screening: bool = True
     # 随机抽样种子。None 表示每次运行随机；设为整数可复现。
     base_sample_seed: Optional[int] = None
     # 固定基础样本索引。若为 None 则按随机/顺序采样策略选取。

@@ -356,9 +356,12 @@ class IVSFFingerprintGenerator:
 
         select_start = time.perf_counter()
         screening_scores = np.array([item["screen_score"] for item in screening_pool], dtype=np.float32)
-        screening_order = np.argsort(screening_scores)[::-1]
         n_selected_bases = min(self.config.num_selected_bases, len(screening_pool))
-        selected_screen_indices = screening_order[:n_selected_bases]
+        if self.config.enable_candidate_screening:
+            screening_order = np.argsort(screening_scores)[::-1]
+            selected_screen_indices = screening_order[:n_selected_bases]
+        else:
+            selected_screen_indices = np.arange(n_selected_bases)
         selection_elapsed += time.perf_counter() - select_start
 
         for idx in selected_screen_indices:
