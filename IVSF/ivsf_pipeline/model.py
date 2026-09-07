@@ -66,6 +66,41 @@ class ResNet20CIFAR10(nn.Module):
         return out
 
 
+class SixLayerCNNGTSRB(nn.Module):
+    """Six-convolution classifier matching BIVBench's gtsrb_convnet architecture."""
+
+    def __init__(self, num_classes: int = 43):
+        super().__init__()
+        self.conv_1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.bn_1 = nn.BatchNorm2d(32)
+        self.conv_2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.bn_2 = nn.BatchNorm2d(32)
+        self.dropout_1 = nn.Dropout(0.2)
+        self.conv_3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn_3 = nn.BatchNorm2d(64)
+        self.conv_4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.bn_4 = nn.BatchNorm2d(64)
+        self.dropout_2 = nn.Dropout(0.2)
+        self.conv_5 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn_5 = nn.BatchNorm2d(128)
+        self.conv_6 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.bn_6 = nn.BatchNorm2d(128)
+        self.dropout_3 = nn.Dropout(0.2)
+        self.fc_1 = nn.Linear(4 * 4 * 128, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.bn_1(F.relu(self.conv_1(x)))
+        x = self.bn_2(F.relu(self.conv_2(x)))
+        x = self.dropout_1(F.max_pool2d(x, 2, 2))
+        x = self.bn_3(F.relu(self.conv_3(x)))
+        x = self.bn_4(F.relu(self.conv_4(x)))
+        x = self.dropout_2(F.max_pool2d(x, 2, 2))
+        x = self.bn_5(F.relu(self.conv_5(x)))
+        x = self.bn_6(F.relu(self.conv_6(x)))
+        x = self.dropout_3(F.max_pool2d(x, 2, 2))
+        return self.fc_1(x.flatten(1))
+
+
 def _normalize_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     # Handle checkpoints saved from DataParallel or wrapped modules.
     normalized = OrderedDict()
@@ -171,6 +206,26 @@ def load_resnet20_cifar10(
     model = ResNet20CIFAR10(num_classes=10)
     state_dict = _load_state_dict_from_checkpoint(ckpt_path)
     model.load_state_dict(state_dict, strict=True)
+    model = model.to(device)
+    model.eval()
+    return model, ckpt_path
+
+
+def load_model(dataset: str, checkpoint_path: Path, device: torch.device) -> Tuple[nn.Module, Path]:
+    dataset_name = str(dataset).lower()
+    if dataset_name == "cifar10":
+        return load_resnet20_cifar10(checkpoint_path, device)
+    if dataset_name != "gtsrb":
+        raise ValueError(f"Unsupported dataset: {dataset}. Expected cifar10 or gtsrb.")
+
+    ckpt_path = checkpoint_path.resolve() if checkpoint_path.is_absolute() else checkpoint_path.resolve()
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(
+            f"GTSRB six-layer CNN checkpoint not found: {ckpt_path}. "
+            "Train BIVBench gtsrb_convnet first, then pass its checkpoint with --checkpoint-path."
+        )
+    model = SixLayerCNNGTSRB(num_classes=43)
+    model.load_state_dict(_load_state_dict_from_checkpoint(ckpt_path), strict=True)
     model = model.to(device)
     model.eval()
     return model, ckpt_path

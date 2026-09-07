@@ -16,9 +16,10 @@ METHODS = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create the CIFAR-10 VMIISF time-cost table.")
+    parser = argparse.ArgumentParser(description="Create a VMIISF time-cost table.")
     parser.add_argument("--input-root", type=Path, default=Path("./outputs/cifar10_time_evaluation"))
     parser.add_argument("--output-dir", type=Path, default=Path("./outputs/cifar10_time_evaluation"))
+    parser.add_argument("--dataset", type=str, default="CIFAR-10", help="Dataset name displayed in the report.")
     return parser.parse_args()
 
 
@@ -51,7 +52,7 @@ def main() -> None:
         screening = "-" if display_name != "VMIISF" else _seconds(summary["candidate_selection_seconds"])
         rows.append(
             {
-                "数据集": "CIFAR-10",
+                "数据集": args.dataset,
                 "方法": display_name,
                 "候选样本筛选（s）": screening,
                 "指纹生成（s）": _seconds(summary["fingerprint_generation_seconds"]),
@@ -61,13 +62,14 @@ def main() -> None:
         )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = args.output_dir / "cifar10_time_cost_results.csv"
+    dataset_slug = args.dataset.lower().replace("-", "").replace(" ", "_")
+    csv_path = args.output_dir / f"{dataset_slug}_time_cost_results.csv"
     with csv_path.open("w", newline="", encoding="utf-8-sig") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
 
-    markdown_path = args.output_dir / "cifar10_time_cost_results.md"
+    markdown_path = args.output_dir / f"{dataset_slug}_time_cost_results.md"
     table_rows = [
         "| 数据集 | 方法 | 候选样本筛选（s） | 指纹生成（s） | 验证（s） | 总时间（s） |",
         "| --- | --- | ---: | ---: | ---: | ---: |",
@@ -83,11 +85,11 @@ def main() -> None:
 
     markdown = "\n".join(
         [
-            "# CIFAR-10 计算时间实验结果",
+            f"# {args.dataset} 计算时间实验结果",
             "",
             "实验在 NVIDIA GeForce RTX 4060 Laptop GPU 上完成。所有方法随机使用 100 个候选样本，保留 5 个基础样本，并生成每个基础样本 3 枚指纹，共 15 枚。VMIISF 与三种基线均使用 220 次优化迭代；时间采用 `time.perf_counter()` 记录，并在 CUDA 操作前后同步。",
             "",
-            "表6-x 不同方法的指纹生成时间及 VMIISF 各阶段时间开销对比",
+            f"表6-4 {args.dataset} 不同方法的指纹生成时间及 VMIISF 各阶段时间开销对比",
             "",
             *table_rows,
             "",

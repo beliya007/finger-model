@@ -11,9 +11,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ivsf_pipeline.data import build_cifar10_subset_loader, cifar10_mean_std, normalize_batch
+from ivsf_pipeline.data import build_dataset_subset_loader, dataset_mean_std, normalize_batch
 from ivsf_pipeline.losses import js_divergence, softmax_probs
-from ivsf_pipeline.model import load_resnet20_cifar10
+from ivsf_pipeline.model import load_model
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,8 +21,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--methods", type=str, default="ssf,publiccheck,misentry", help="Comma-separated methods: ssf,publiccheck,misentry")
     parser.add_argument("--output-root", type=str, default="./outputs/baseline_fingerprints", help="Root output directory")
     parser.add_argument("--checkpoint-path", type=str, default="./checkpoints/resnet20_cifar10.pth", help="Path to clean ResNet20 checkpoint")
+    parser.add_argument("--dataset", choices=["cifar10", "gtsrb"], default="cifar10", help="Dataset/model pair to use")
     parser.add_argument("--device", type=str, default="", help="cuda or cpu")
-    parser.add_argument("--data-root", type=str, default="./data", help="CIFAR-10 root")
+    parser.add_argument("--data-root", type=str, default="./data", help="Dataset root")
     parser.add_argument("--num-screen-samples", type=int, default=60, help="How many train samples to screen")
     parser.add_argument("--num-selected-bases", type=int, default=10, help="How many base samples to keep")
     parser.add_argument("--num-candidates-per-base", type=int, default=3, help="Fingerprints per base sample")
@@ -35,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         "--base-sample-indices",
         type=str,
         default="",
-        help="Optional comma-separated CIFAR-10 train indices to force as base samples (e.g. '3879,6045,...').",
+        help="Optional comma-separated training-set indices to force as base samples.",
     )
     return parser.parse_args()
 
@@ -68,8 +69,14 @@ def _project_l2(delta: torch.Tensor, radius: float) -> torch.Tensor:
     return flat.view_as(delta)
 
 
-def _predict_probs(model: torch.nn.Module, images: np.ndarray, device: torch.device, batch_size: int) -> np.ndarray:
-    mean, std = cifar10_mean_std(device)
+def _predict_probs(
+    model: torch.nn.Module,
+    images: np.ndarray,
+    device: torch.device,
+    batch_size: int,
+    dataset: str,
+) -> np.ndarray:
+    mean, std = dataset_mean_std(dataset, device)
     x = torch.from_numpy(images).to(device=device, dtype=torch.float32)
     probs_all: List[np.ndarray] = []
 
@@ -386,17 +393,18 @@ def main() -> None:
         raise ValueError(f"Unsupported methods: {invalid}. Valid: ssf, publiccheck, misentry")
 
     device = _resolve_device(args.device)
-    model, resolved_ckpt = load_resnet20_cifar10(Path(args.checkpoint_path), device=device)
-    mean, std = cifar10_mean_std(device)
+    model, resolved_ckpt = load_model(args.dataset, Path(args.checkpoint_path), device=device)
+    mean, std = dataset_mean_std(args.dataset, device)
 
     fixed_indices = None
     if args.base_sample_indices.strip():
         fixed_indices = [int(x.strip()) for x in args.base_sample_indices.split(",") if x.strip()]
 
-    loader, sampled_indices = build_cifar10_subset_loader(
+    loader, sampled_indices = build_dataset_subset_loader(
         data_root=args.data_root,
         num_samples=args.num_screen_samples,
         num_workers=2,
+        dataset=args.dataset,
         random_subset=(fixed_indices is None),
         subset_seed=args.seed,
         fixed_indices=fixed_indices,
@@ -475,7 +483,7 @@ def main() -> None:
             generated_images = np.stack(selected_images, axis=0).astype(np.float32)
             _synchronize_device(device)
             verification_start = time.perf_counter()
-            verification_probs = _predict_probs(model, generated_images, device, args.batch_size)
+            verification_probs = _predict_probs(model, generated_images, device, args.batch_size, args.dataset)
             _ = np.argmax(verification_probs, axis=1)
             _synchronize_device(device)
             verification_seconds = time.perf_counter() - verification_start

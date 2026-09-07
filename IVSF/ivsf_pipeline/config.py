@@ -9,6 +9,7 @@ class IVSFConfig:
     device: str = "cuda"
 
     # Dataset
+    dataset: str = "cifar10"
     data_root: str = "./data"
     # 筛选阶段的基础样本池大小 (n)
     num_screen_samples: int = 10

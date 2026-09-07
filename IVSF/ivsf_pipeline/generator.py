@@ -12,7 +12,7 @@ import torch
 from lpips import LPIPS as LPIPSModel
 
 from .config import IVSFConfig
-from .data import build_cifar10_subset_loader, cifar10_mean_std, normalize_batch
+from .data import build_dataset_subset_loader, dataset_mean_std, normalize_batch
 from .io_utils import (
     save_meta,
     save_npz,
@@ -31,7 +31,7 @@ from .losses import (
     softmax_probs,
     stealth_loss,
 )
-from .model import load_resnet20_cifar10
+from .model import load_model
 
 
 class IVSFFingerprintGenerator:
@@ -39,12 +39,13 @@ class IVSFFingerprintGenerator:
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
 
-        self.model, self.checkpoint_path = load_resnet20_cifar10(
+        self.model, self.checkpoint_path = load_model(
+            dataset=config.dataset,
             checkpoint_path=Path(config.checkpoint_path),
             device=self.device,
         )
 
-        self.mean, self.std = cifar10_mean_std(self.device)
+        self.mean, self.std = dataset_mean_std(config.dataset, self.device)
         self.lpips_model = LPIPSModel(net="alex", version="0.1").to(self.device)
         self.lpips_model.eval()
 
@@ -261,10 +262,11 @@ class IVSFFingerprintGenerator:
             else:
                 item.unlink()
 
-        loader, sampled_indices = build_cifar10_subset_loader(
+        loader, sampled_indices = build_dataset_subset_loader(
             data_root=self.config.data_root,
             num_samples=self.config.num_screen_samples,
             num_workers=self.config.num_workers,
+            dataset=self.config.dataset,
             random_subset=self.config.random_base_sampling,
             subset_seed=self.config.base_sample_seed,
             fixed_indices=self.config.base_sample_indices,

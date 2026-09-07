@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from ivsf_pipeline.data import cifar10_mean_std, normalize_batch
+from ivsf_pipeline.data import dataset_mean_std, normalize_batch
 
 
 @dataclass
@@ -54,8 +54,8 @@ def _evaluate_accuracy(
     return float(correct) / float(max(total, 1))
 
 
-def evaluate_clean_accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
-    mean, std = cifar10_mean_std(device)
+def evaluate_clean_accuracy(model: nn.Module, loader: DataLoader, device: torch.device, dataset: str = "cifar10") -> float:
+    mean, std = dataset_mean_std(dataset, device)
     return _evaluate_accuracy(model, loader, device, mean, std, target_label=None)
 
 
@@ -66,11 +66,12 @@ def backdoor_model_trainer(
     test_trigger_loader: DataLoader,
     device: torch.device,
     cfg: TrainConfig,
+    dataset: str = "cifar10",
 ) -> Dict[str, object]:
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
-    mean, std = cifar10_mean_std(device)
+    mean, std = dataset_mean_std(dataset, device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
 
@@ -141,21 +142,23 @@ def fine_tune_last_layer(
     test_loader: DataLoader,
     device: torch.device,
     cfg: FTLLConfig,
+    dataset: str = "cifar10",
 ) -> Dict[str, object]:
-    if not hasattr(model, "fc"):
-        raise ValueError("FTLL expects model to have a final layer named 'fc'.")
+    classifier = getattr(model, "fc", None) or getattr(model, "fc_1", None)
+    if classifier is None:
+        raise ValueError("FTLL expects a final layer named 'fc' or 'fc_1'.")
 
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
     for p in model.parameters():
         p.requires_grad = False
-    for p in model.fc.parameters():
+    for p in classifier.parameters():
         p.requires_grad = True
 
-    mean, std = cifar10_mean_std(device)
+    mean, std = dataset_mean_std(dataset, device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.fc.parameters(), lr=float(cfg.lr))
+    optimizer = torch.optim.Adam(classifier.parameters(), lr=float(cfg.lr))
 
     use_amp = bool(cfg.use_amp and device.type == "cuda")
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)

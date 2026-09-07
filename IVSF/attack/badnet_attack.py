@@ -11,11 +11,12 @@ import torch.nn as nn
 
 from attack.data import BackdoorDataConfig, create_backdoor_data_loaders, create_clean_data_loaders
 from attack.deeplearning import FTLLConfig, TrainConfig, backdoor_model_trainer, evaluate_clean_accuracy, fine_tune_last_layer
-from ivsf_pipeline.model import ResNet20CIFAR10, load_resnet20_cifar10
+from ivsf_pipeline.model import SixLayerCNNGTSRB, load_model
 
 
 @dataclass
 class AttackConfig:
+    dataset: str = "cifar10"
     clean_checkpoint_path: str = "./checkpoints/resnet20_cifar10.pth"
     data_root: str = "./data"
     output_dir: str = "./outputs/attack_run"
@@ -58,11 +59,12 @@ class AttackConfig:
         return p
 
 
-def get_default_attacked_checkpoint_path(output_dir: str, attack_type: str = "badnet") -> Path:
+def get_default_attacked_checkpoint_path(output_dir: str, attack_type: str = "badnet", dataset: str = "cifar10") -> Path:
+    model_name = "gtsrb_six_layer_cnn" if str(dataset).lower() == "gtsrb" else "resnet20_cifar10"
     if str(attack_type) == "badnet":
         # Keep old default path for backward compatibility.
-        return Path(output_dir) / "attacked_resnet20_cifar10.pth"
-    return Path(output_dir) / f"attacked_resnet20_cifar10_{attack_type}.pth"
+        return Path(output_dir) / f"attacked_{model_name}.pth"
+    return Path(output_dir) / f"attacked_{model_name}_{attack_type}.pth"
 
 
 def _set_seed(seed: int) -> None:
@@ -124,13 +126,14 @@ def train_attack(cfg: AttackConfig) -> Dict[str, object]:
     use_cuda = torch.cuda.is_available() and str(cfg.device).lower().startswith("cuda")
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    model, clean_ckpt_path = load_resnet20_cifar10(Path(cfg.clean_checkpoint_path), device=device)
+    model, clean_ckpt_path = load_model(cfg.dataset, Path(cfg.clean_checkpoint_path), device=device)
 
     history = []
     extra_meta: Dict[str, object] = {}
 
     if cfg.attack_type in {"badnet", "trojan", "clean_label_backdoor"}:
         data_cfg = BackdoorDataConfig(
+            dataset=cfg.dataset,
             data_root=cfg.data_root,
             batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
@@ -164,6 +167,7 @@ def train_attack(cfg: AttackConfig) -> Dict[str, object]:
             test_trigger_loader=loaders["test_trigger"],
             device=device,
             cfg=train_cfg,
+            dataset=cfg.dataset,
         )
 
         model = train_result["model"]
@@ -171,6 +175,7 @@ def train_attack(cfg: AttackConfig) -> Dict[str, object]:
         extra_meta["best_asr"] = float(train_result["best_asr"])
     elif cfg.attack_type == "weight_pruning":
         data_cfg = BackdoorDataConfig(
+            dataset=cfg.dataset,
             data_root=cfg.data_root,
             batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
@@ -183,7 +188,7 @@ def train_attack(cfg: AttackConfig) -> Dict[str, object]:
         )
         loaders = create_clean_data_loaders(data_cfg, device=device)
         prune_stats = _apply_weight_pruning(model=model, sparsity=cfg.pruning_ratio, prune_last_layer=True)
-        clean_acc = evaluate_clean_accuracy(model, loaders["test"], device)
+        clean_acc = evaluate_clean_accuracy(model, loaders["test"], device, cfg.dataset)
 
         history = [
             {
@@ -195,6 +200,7 @@ def train_attack(cfg: AttackConfig) -> Dict[str, object]:
         extra_meta.update(prune_stats)
     elif cfg.attack_type == "ftll":
         data_cfg = BackdoorDataConfig(
+            dataset=cfg.dataset,
             data_root=cfg.data_root,
             batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
@@ -212,6 +218,7 @@ def train_attack(cfg: AttackConfig) -> Dict[str, object]:
             test_loader=loaders["test"],
             device=device,
             cfg=FTLLConfig(epochs=cfg.ftll_epochs, lr=cfg.ftll_lr, use_amp=cfg.use_amp),
+            dataset=cfg.dataset,
         )
         model = ftll_result["model"]
         history = ftll_result["history"]
@@ -221,12 +228,13 @@ def train_attack(cfg: AttackConfig) -> Dict[str, object]:
             "Unsupported attack_type. Expected one of: badnet, trojan, clean_label_backdoor, weight_pruning, ftll"
         )
 
-    attacked_ckpt_path = get_default_attacked_checkpoint_path(cfg.output_dir, cfg.attack_type)
+    attacked_ckpt_path = get_default_attacked_checkpoint_path(cfg.output_dir, cfg.attack_type, cfg.dataset)
     torch.save(
         {
             "model": model.state_dict(),
             "meta": {
                 "attack_type": cfg.attack_type,
+                "dataset": cfg.dataset,
                 "clean_checkpoint": str(clean_ckpt_path),
                 "trigger_label": cfg.trigger_label,
                 "poison_ratio": cfg.poison_ratio,
@@ -263,7 +271,7 @@ def train_badnet_attack(cfg: AttackConfig) -> Dict[str, object]:
     return train_attack(cfg)
 
 
-def load_attacked_model_checkpoint(attacked_checkpoint_path: Path, device: torch.device) -> Dict[str, object]:
+def load_attacked_model_checkpoint(attacked_checkpoint_path: Path, device: torch.device, dataset: str = "cifar10") -> Dict[str, object]:
     ckpt_path = attacked_checkpoint_path.resolve() if not attacked_checkpoint_path.is_absolute() else attacked_checkpoint_path
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Attacked checkpoint not found: {ckpt_path}")
@@ -272,7 +280,7 @@ def load_attacked_model_checkpoint(attacked_checkpoint_path: Path, device: torch
     if not isinstance(checkpoint, dict) or "model" not in checkpoint:
         raise ValueError("Unsupported attacked checkpoint format, expected dict with key 'model'.")
 
-    model = ResNet20CIFAR10(num_classes=10)
+    model = SixLayerCNNGTSRB(num_classes=43) if str(dataset).lower() == "gtsrb" else load_model("cifar10", Path("./checkpoints/resnet20_cifar10.pth"), device)[0]
     model.load_state_dict(checkpoint["model"], strict=True)
     model = model.to(device)
     model.eval()

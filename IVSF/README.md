@@ -1,6 +1,9 @@
 # IVSF 指纹验证与攻击模拟流程
 
-本项目用于生成深度学习模型的指纹（Fingerprinting），并模拟攻击场景下的模型所有权验证与一致性对比。支持 ResNet20 在 CIFAR-10 数据集上的完整实验流程。
+本项目用于生成深度学习模型的指纹（Fingerprinting），并模拟攻击场景下的模型所有权验证与一致性对比。指纹生成模块支持以下数据集与模型组合：
+
+* CIFAR-10 + ResNet20
+* GTSRB + 六层 CNN（43 类）
 
 ## 1. 环境准备
 
@@ -42,6 +45,22 @@ shiyan-finger-model/
 # 切换到 IVSF 目录
 cd IVSF
 ```
+
+### GTSRB + 六层 CNN
+
+先在 IVSF 中训练六层 CNN。训练入口会自动下载 GTSRB、将图像缩放至 $32 \times 32$，并将最佳权重保存到 `./checkpoints/gtsrb_six_layer_cnn.pth`：
+
+```powershell
+python train_gtsrb_six_layer_cnn.py --device cuda
+```
+
+训练完成后，使用该权重生成 IVSF 指纹：
+
+```powershell
+python run_ivsf_fingerprint.py --quick --dataset gtsrb --data-root ./data --checkpoint-path ./checkpoints/gtsrb_six_layer_cnn.pth --device cuda
+```
+
+GTSRB 的六层 CNN 依次包含 6 个 $3 \times 3$ 卷积层（通道数为 32、32、64、64、128、128）、3 个最大池化层以及 43 类全连接输出层。其层命名与 BIVBench 的 `gtsrb_convnet` 相同，IVSF 可加载两种训练流程导出的 `model` 权重。
 
 ### 第一步：指纹生成与原始模型评估
 **描述**：从原始模型生成候选指纹，并记录在原始模型下的标签输出与点互信息（MI）。
@@ -190,6 +209,8 @@ python run_ivsf_fingerprint.py [--quick | --full] [--config-json '{...}'] [--out
     ```
 *   `--output-dir`: 覆盖输出目录。
 *   `--checkpoint-path`: 原始干净模型权重路径。
+*   `--dataset`: 数据集/模型组合，可选 `cifar10`（默认）或 `gtsrb`。
+*   `--data-root`: 数据集根目录，默认 `./data`。
 *   `--device`: 指定运行设备（`cuda` 或 `cpu`）。
 
 ### 4.2 攻击训练脚本
