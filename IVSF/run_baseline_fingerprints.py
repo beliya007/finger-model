@@ -180,11 +180,19 @@ def _optimize_misentry(
     steps: int,
     lr: float,
     l2_radius: float,
+    label_margin: float = 0.5,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """MiSentry 优化目标：最大化相对干净模型的输出分布偏移（JS 散度），同时保持正确类别仍是 top-1（soft margin）。
+
+    与 SSF / PublicCheck 不同，这里采用**分布偏移**而不是熵/边界距离：
+      - JS 项把对抗样本的 softmax 推向远离 p_ref 的方向
+      - Soft margin 项仅在「正确类 logit - 次大类 logit < label_margin」时才产生梯度，
+        这样优化器不会被 ce_keep 拉回到 delta=0
+    """
     with torch.no_grad():
         p_ref = softmax_probs(model(normalize_batch(x, mean, std)))
 
-    delta = torch.randn_like(x) * 0.008
+    delta = torch.randn_like(x) * 0.05
     delta.requires_grad_(True)
     optimizer = torch.optim.Adam([delta], lr=lr)
 
@@ -194,11 +202,18 @@ def _optimize_misentry(
         p_adv = softmax_probs(logits_adv)
 
         js = js_divergence(p_ref, p_adv).mean()
-        ce_keep = F.cross_entropy(logits_adv, y)
+
+        # Soft label preservation: only push back when the correct class margin drops below threshold.
+        logits_correct = logits_adv.gather(1, y.view(-1, 1))
+        masked = logits_adv.scatter(1, y.view(-1, 1), -1e9)
+        logits_max_other = masked.max(dim=1, keepdim=True).values
+        margin_gap = (logits_correct - logits_max_other)
+        soft_ce = torch.clamp(label_margin - margin_gap, min=0.0).mean()
+
         l2 = torch.norm(delta.view(delta.shape[0], -1), p=2, dim=1).mean()
 
-        # MiSentry-style compromise: distribution shift with label retention.
-        loss = -js + 1.0 * ce_keep + 0.05 * l2
+        # MiSentry-style compromise: distribution shift with soft label retention.
+        loss = -js + 0.3 * soft_ce + 0.05 * l2
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
